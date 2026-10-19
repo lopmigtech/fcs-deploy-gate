@@ -1,0 +1,22 @@
+# Exclusions for the fixture Consumer. Each entry stops one specific Finding from counting
+# against a Deployment until the date it names. Reviewed by the Security team through
+# code ownership; the console always sees the unfiltered scan.
+exclusions:
+  - rule: iac/9c7e2b14-6a3f-4d58-b2e9-1f0a4c8d6e35
+    resource: aws_s3_bucket.logs
+    file: logging.tf
+    reason: The logs bucket is the access-log target itself; logging it would recurse.
+    expires: 2027-06-30
+    approved_by: security-reviewer@example.gov
+
+  - rule: iac/3f2a9c51-8b4d-4c7e-a1f6-5e9d0b2c7a84
+    resource: aws_s3_bucket.logs
+    reason: Encryption rollout for the logs bucket was scheduled for January.
+    expires: 2026-01-15
+    approved_by: security-reviewer@example.gov
+
+  - rule: iac/0d0b5a6e-7f9c-4a1e-9b3f-2c6d8e1f4a70
+    resource: aws_s3_bucket.decommissioned_assets
+    reason: Bucket removed in the previous release; entry kept by mistake.
+    expires: 2027-01-31
+    approved_by: security-reviewer@example.gov

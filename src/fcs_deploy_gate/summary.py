@@ -5,10 +5,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from fcs_deploy_gate.config import Config
+from fcs_deploy_gate.exclusions import ExcludedFinding, StaleExclusion
 from fcs_deploy_gate.report import Finding
 from fcs_deploy_gate.verdict import Verdict
 
 FINDINGS_TABLE_HEADER = "| Severity | Rule | Location | Resource |\n|---|---|---|---|"
+EXCLUDED_TABLE_HEADER = (
+    "| Severity | Rule | Location | Resource | Reason | Approved by | Expires |\n"
+    "|---|---|---|---|---|---|---|"
+)
+STALE_TABLE_HEADER = "| Rule | Resource or file | Expires | Why |\n|---|---|---|---|"
 
 
 def _location(finding: Finding) -> str:
@@ -32,6 +38,30 @@ def _rule(finding: Finding) -> str:
 def _findings_table(findings: Iterable[Finding]) -> str:
     rows = [f"| {f.severity} | {_rule(f)} | {_location(f)} | {_resource(f)} |" for f in findings]
     return "\n".join([FINDINGS_TABLE_HEADER, *rows])
+
+
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _excluded_table(excluded: Iterable[ExcludedFinding]) -> str:
+    rows = [
+        f"| {e.finding.severity} | {_rule(e.finding)} | {_location(e.finding)} "
+        f"| {_resource(e.finding)} | {_cell(e.exclusion.reason)} "
+        f"| {_cell(e.exclusion.approved_by)} | {e.exclusion.expires.isoformat()} |"
+        for e in excluded
+    ]
+    return "\n".join([EXCLUDED_TABLE_HEADER, *rows])
+
+
+def _stale_table(stale: Iterable[StaleExclusion]) -> str:
+    rows = []
+    for s in stale:
+        where = " ".join(f"`{part}`" for part in (s.exclusion.resource, s.exclusion.file) if part)
+        rows.append(
+            f"| `{s.exclusion.rule}` | {where} | {s.exclusion.expires.isoformat()} | {s.why} |"
+        )
+    return "\n".join([STALE_TABLE_HEADER, *rows])
 
 
 def render_summary(verdict: Verdict, config: Config) -> str:
@@ -64,11 +94,29 @@ def render_summary(verdict: Verdict, config: Config) -> str:
     else:
         parts += ["No Blocking findings at or above the Blocking threshold.", ""]
 
+    if verdict.excluded:
+        parts += [
+            f"## Excluded ({len(verdict.excluded)})",
+            "",
+            _excluded_table(verdict.excluded),
+            "",
+        ]
+
     if verdict.below_threshold:
         parts += [
             f"## Below the Blocking threshold ({len(verdict.below_threshold)})",
             "",
             _findings_table(verdict.below_threshold),
+            "",
+        ]
+
+    if verdict.stale_exclusions:
+        parts += [
+            f"## Stale exclusions ({len(verdict.stale_exclusions)})",
+            "",
+            _stale_table(verdict.stale_exclusions),
+            "",
+            "Stale entries are reported, never dropped: remove or renew them in `.fcs-gate.yml`.",
             "",
         ]
 

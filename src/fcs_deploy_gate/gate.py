@@ -6,10 +6,17 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TextIO
 
 from fcs_deploy_gate.config import Config, ConfigurationError, parse_args
+from fcs_deploy_gate.exclusions import (
+    EXCLUSION_FILENAME,
+    Exclusion,
+    load_exclusions,
+    repository_root,
+)
 from fcs_deploy_gate.report import (
     ReportError,
     findings_from_report,
@@ -30,9 +37,13 @@ def run(
     env: Mapping[str, str],
     stdout: TextIO,
     stderr: TextIO,
+    today: date | None = None,
 ) -> int:
+    """The Gate. ``today`` is the clock seam: the UTC date unless a test overrides it."""
+    today = today or datetime.now(UTC).date()
     try:
         config = parse_args(argv)
+        exclusions = load_exclusions(repository_root(config.scan_path) / EXCLUSION_FILENAME)
     except ConfigurationError as exc:
         stderr.write(f"fcs-deploy-gate: error: {exc}\n")
         return 2
@@ -45,7 +56,7 @@ def run(
         work_dir=config.work_dir,
         env=env,
     )
-    verdict = _judge(attempt, config)
+    verdict = _judge(attempt, config, exclusions, today)
     summary = render_summary(verdict, config)
 
     document = json.dumps(verdict_document(verdict, config), indent=2)
@@ -80,7 +91,9 @@ def _advisory_warning(verdict: Verdict) -> str:
     )
 
 
-def _judge(attempt: ScanAttempt, config: Config) -> Verdict:
+def _judge(
+    attempt: ScanAttempt, config: Config, exclusions: list[Exclusion], today: date
+) -> Verdict:
     """Fail closed: a scan that did not complete, or a report the Gate cannot read, blocks."""
     toggle = config.block_on_unscanned_files
     if not attempt.completed:
@@ -93,6 +106,8 @@ def _judge(attempt: ScanAttempt, config: Config) -> Verdict:
     return decide(
         findings,
         config.blocking_threshold,
+        exclusions=exclusions,
+        today=today,
         unscanned_files=unscanned_file_count(report),
         block_on_unscanned_files=toggle,
     )

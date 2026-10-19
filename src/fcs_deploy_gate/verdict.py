@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from fcs_deploy_gate.config import SEVERITIES, Config
+from fcs_deploy_gate.exclusions import (
+    ExcludedFinding,
+    Exclusion,
+    StaleExclusion,
+    apply_exclusions,
+)
 from fcs_deploy_gate.report import Finding
 
 
@@ -14,6 +21,8 @@ from fcs_deploy_gate.report import Finding
 class Verdict:
     blocking_findings: list[Finding] = field(default_factory=list)
     below_threshold: list[Finding] = field(default_factory=list)
+    excluded: list[ExcludedFinding] = field(default_factory=list)
+    stale_exclusions: list[StaleExclusion] = field(default_factory=list)
     error: str | None = None
     unscanned_files: int = 0
     block_on_unscanned_files: bool = True
@@ -49,13 +58,18 @@ def decide(
     findings: Iterable[Finding],
     blocking_threshold: frozenset[str],
     *,
+    exclusions: list[Exclusion] | None = None,
+    today: date | None = None,
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
 ) -> Verdict:
     ordered = sorted(findings, key=_ordering)
+    counted, excluded, stale = apply_exclusions(ordered, exclusions or [], today or date.max)
     return Verdict(
-        blocking_findings=[f for f in ordered if f.severity in blocking_threshold],
-        below_threshold=[f for f in ordered if f.severity not in blocking_threshold],
+        blocking_findings=[f for f in counted if f.severity in blocking_threshold],
+        below_threshold=[f for f in counted if f.severity not in blocking_threshold],
+        excluded=excluded,
+        stale_exclusions=stale,
         unscanned_files=unscanned_files,
         block_on_unscanned_files=block_on_unscanned_files,
     )
@@ -70,6 +84,11 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "blocking_threshold": config.blocking_threshold_ordered,
         "blocking_findings": [f.to_dict() for f in verdict.blocking_findings],
         "below_threshold": [f.to_dict() for f in verdict.below_threshold],
+        "excluded": [
+            {"finding": e.finding.to_dict(), "exclusion": e.exclusion.to_dict()}
+            for e in verdict.excluded
+        ],
+        "stale_exclusions": [s.to_dict() for s in verdict.stale_exclusions],
         "unscanned_files": verdict.unscanned_files,
         "block_on_unscanned_files": verdict.block_on_unscanned_files,
         "error": verdict.error,

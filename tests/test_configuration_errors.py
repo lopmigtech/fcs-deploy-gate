@@ -39,7 +39,7 @@ def test_configuration_errors_exit_2_with_a_message(
     assert result.exit_code == 2
     assert expected_message in result.stderr
     assert result.invocations == []
-    assert not (result.work_dir / "verdict.json").exists()
+    assert result.verdict_document is None
 
 
 @pytest.mark.parametrize("mode", MODES)
