@@ -30,6 +30,13 @@ class Finding:
     resource_name: str | None
     description: str
 
+    @property
+    def resource_address(self) -> str | None:
+        """``type.name`` when the Finding is on a resource, else None."""
+        if self.resource_type and self.resource_name:
+            return f"{self.resource_type}.{self.resource_name}"
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

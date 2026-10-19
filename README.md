@@ -26,7 +26,7 @@ Until the pinned CLI download lands (ticket 5), the Gate refuses to run unless `
 
 ## Exclusions
 
-An Exclusion is a version-controlled, approved, expiring exemption for one specific Finding. Exclusions live in a single file, `.fcs-gate.yml`, at the Consumer repository root (the nearest ancestor of the scanned path that holds `.git`). A missing file means no Exclusions.
+An Exclusion is a version-controlled, approved, expiring exemption for one specific Finding. Exclusions live in a single file, `.fcs-gate.yml`, at the Consumer repository root: the scanned directory or its nearest ancestor that holds `.git` (a directory, or the file a worktree or submodule carries). When nothing holds `.git`, the Gate says so on stderr and reads the file from the scanned directory. A missing file means no Exclusions.
 
 ```yaml
 exclusions:
@@ -40,7 +40,7 @@ exclusions:
 
 - Every field named by an entry must match the Finding: the rule id exactly, the resource as `type.name`, the file as the path the Gate reports. At least one of `resource` or `file` is required; `reason` and `approved_by` must be non-empty.
 - An Exclusion applies through its expiry date and stops the day after. Dates are compared as UTC calendar days.
-- Stale entries are reported, never dropped silently: expired ones, and ones that match nothing in the current scan.
+- Stale exclusions are reported, never dropped silently: entries that have expired, and entries that match no Finding in the current scan. When two entries cover one Finding, the first in the file is the one recorded; the second still counts as matched.
 - Any malformation (unknown keys, missing fields, an unparseable date, the wrong shape) exits 2 in both modes, before any scan.
 - Exclusions change the Verdict only. The scan runs against the tenant's full Policy, no CLI exclusion or filter flag is ever passed, and the console always sees the unfiltered scan. Console exemptions govern IOMs on deployed resources; Exclusions govern Findings on resources about to be deployed.
 - Consumers must route `.fcs-gate.yml` to the Security team through code ownership with required approval on the protected default branch (GitHub `CODEOWNERS`; GitLab Code Owners). The Gate does not enforce this; the file's `approved_by` is the audit trail.

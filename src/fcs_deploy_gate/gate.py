@@ -43,7 +43,13 @@ def run(
     today = today or datetime.now(UTC).date()
     try:
         config = parse_args(argv)
-        exclusions = load_exclusions(repository_root(config.scan_path) / EXCLUSION_FILENAME)
+        root = repository_root(config.scan_path)
+        if not (root / ".git").exists():
+            stderr.write(
+                f"fcs-deploy-gate: note: no .git found at or above {config.scan_path}; "
+                f"reading {EXCLUSION_FILENAME} from the scanned directory\n"
+            )
+        exclusions = load_exclusions(root / EXCLUSION_FILENAME)
     except ConfigurationError as exc:
         stderr.write(f"fcs-deploy-gate: error: {exc}\n")
         return 2

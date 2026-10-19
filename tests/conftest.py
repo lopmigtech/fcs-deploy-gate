@@ -56,7 +56,7 @@ class GateHarness:
 
     @property
     def repo_root(self) -> Path:
-        """The Consumer repository root: the scanned path's nearest ancestor holding .git."""
+        """The Consumer repository root: tmp_path, where the scan_root fixture puts .git."""
         return self.tmp_path
 
     def write_exclusions(self, content: str) -> Path:

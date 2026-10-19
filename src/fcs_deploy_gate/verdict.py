@@ -58,13 +58,13 @@ def decide(
     findings: Iterable[Finding],
     blocking_threshold: frozenset[str],
     *,
-    exclusions: list[Exclusion] | None = None,
-    today: date | None = None,
+    exclusions: list[Exclusion],
+    today: date,
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
 ) -> Verdict:
     ordered = sorted(findings, key=_ordering)
-    counted, excluded, stale = apply_exclusions(ordered, exclusions or [], today or date.max)
+    counted, excluded, stale = apply_exclusions(ordered, exclusions, today)
     return Verdict(
         blocking_findings=[f for f in counted if f.severity in blocking_threshold],
         below_threshold=[f for f in counted if f.severity not in blocking_threshold],

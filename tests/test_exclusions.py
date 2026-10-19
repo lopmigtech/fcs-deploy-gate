@@ -200,3 +200,76 @@ def test_summary_has_excluded_and_stale_exclusion_tables(gate: GateHarness) -> N
     assert "| Rule | Resource or file | Expires | Why |" in result.summary
     assert "| expired |" in result.summary
     assert "| unmatched |" in result.summary
+
+
+LOGGING_RULE = "iac/9c7e2b14-6a3f-4d58-b2e9-1f0a4c8d6e35"
+
+
+def test_two_entries_covering_one_finding_are_both_matched_not_stale(
+    gate: GateHarness,
+) -> None:
+    gate.write_exclusions(
+        "exclusions:\n"
+        + entry(LOGGING_RULE, resource="aws_s3_bucket.logs")
+        + entry(LOGGING_RULE, file="logging.tf")
+    )
+
+    result = gate(today=TODAY)
+
+    assert [observed(e["finding"]) for e in result.verdict["excluded"]] == [
+        LOGS_BUCKET_WITHOUT_LOGGING
+    ]
+    assert result.verdict["excluded"][0]["exclusion"]["resource"] == "aws_s3_bucket.logs"
+    assert result.verdict["stale_exclusions"] == []
+
+
+def test_a_resource_entry_never_matches_a_finding_without_a_resource(
+    gate: GateHarness,
+) -> None:
+    gate.write_exclusions("exclusions:\n" + entry("secret/AWS Access Key ID", resource="None.None"))
+
+    result = gate(today=TODAY)
+
+    assert result.verdict["excluded"] == []
+    assert [s["why"] for s in result.verdict["stale_exclusions"]] == ["unmatched"]
+    assert "secret/AWS Access Key ID" in [f["rule_id"] for f in result.verdict["blocking_findings"]]
+
+
+def test_the_cli_arguments_are_identical_with_and_without_an_exclusion_file(
+    gate: GateHarness,
+) -> None:
+    without = gate(today=TODAY)
+    gate.use_exclusion_fixture()
+    with_file = gate(today=TODAY)
+
+    assert with_file.invocations[0]["argv"] == without.invocations[0]["argv"]
+
+
+def test_without_a_git_marker_the_scanned_directory_is_the_repository_root(
+    gate: GateHarness,
+) -> None:
+    (gate.tmp_path / ".git").rmdir()
+    gate.write_exclusions("exclusions:\n" + entry(ENCRYPTION_RULE, file="logging.tf"))  # ignored
+    (gate.scan_root / ".fcs-gate.yml").write_text(
+        "exclusions:\n" + entry(LOGGING_RULE, resource="aws_s3_bucket.logs")
+    )
+
+    result = gate(today=TODAY)
+
+    assert [e["exclusion"]["rule"] for e in result.verdict["excluded"]] == [LOGGING_RULE]
+    assert ".git" in result.stderr and str(gate.scan_root) in result.stderr
+
+
+def test_a_git_file_in_the_scanned_directory_makes_it_the_repository_root(
+    gate: GateHarness,
+) -> None:
+    (gate.scan_root / ".git").write_text("gitdir: ../.git/modules/infra\n")
+    gate.write_exclusions("exclusions:\n" + entry(ENCRYPTION_RULE, file="logging.tf"))  # ignored
+    (gate.scan_root / ".fcs-gate.yml").write_text(
+        "exclusions:\n" + entry(LOGGING_RULE, resource="aws_s3_bucket.logs")
+    )
+
+    result = gate(today=TODAY)
+
+    assert [e["exclusion"]["rule"] for e in result.verdict["excluded"]] == [LOGGING_RULE]
+    assert ".git" not in result.stderr

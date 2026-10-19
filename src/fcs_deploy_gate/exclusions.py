@@ -8,10 +8,12 @@ own exclusion flags are never used (spec: Exclusions).
 from __future__ import annotations
 
 import os.path
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -22,6 +24,10 @@ EXCLUSION_FILENAME = ".fcs-gate.yml"
 REQUIRED_KEYS: frozenset[str] = frozenset({"rule", "reason", "expires", "approved_by"})
 OPTIONAL_KEYS: frozenset[str] = frozenset({"resource", "file"})
 KNOWN_KEYS: frozenset[str] = REQUIRED_KEYS | OPTIONAL_KEYS
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+StaleReason = Literal["expired", "unmatched"]
+Fail = Callable[[str], ConfigurationError]
 
 
 @dataclass(frozen=True)
@@ -37,9 +43,8 @@ class Exclusion:
         """True only when every field the entry names matches the Finding."""
         if finding.rule_id != self.rule:
             return False
-        if self.resource is not None:
-            if f"{finding.resource_type}.{finding.resource_name}" != self.resource:
-                return False
+        if self.resource is not None and finding.resource_address != self.resource:
+            return False
         if self.file is not None and finding.file != self.file:
             return False
         return True
@@ -67,7 +72,7 @@ class ExcludedFinding:
 @dataclass(frozen=True)
 class StaleExclusion:
     exclusion: Exclusion
-    why: str  # "expired" or "unmatched"
+    why: StaleReason
 
     def to_dict(self) -> dict[str, Any]:
         return {**self.exclusion.to_dict(), "why": self.why}
@@ -89,60 +94,60 @@ def _entry_error(index: int, entry: object, problem: str) -> ConfigurationError:
     return ConfigurationError(f"{EXCLUSION_FILENAME}: {label}: {problem}")
 
 
-def _required_text(entry: dict[str, Any], key: str, index: int) -> str:
+def _text(entry: dict[str, Any], key: str, fail: Fail, *, required: bool) -> str | None:
+    if key not in entry and not required:
+        return None
     value = entry.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise _entry_error(index, entry, f"{key!r} must be a non-empty string")
+        when = "" if required else " when present"
+        raise fail(f"{key!r} must be a non-empty string{when}")
     return value.strip()
 
 
-def _optional_text(entry: dict[str, Any], key: str, index: int) -> str | None:
-    if key not in entry:
-        return None
-    value = entry[key]
-    if not isinstance(value, str) or not value.strip():
-        raise _entry_error(index, entry, f"{key!r} must be a non-empty string when present")
-    return value.strip()
-
-
-def _expiry(entry: dict[str, Any], index: int) -> date:
-    value = entry.get("expires")
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
+def _expiry(value: object, fail: Fail) -> date:
+    """A YAML date or an ISO ``YYYY-MM-DD`` string, nothing else: a timestamp would be
+    truncated to some local day, and that is not what an approver wrote down."""
+    if isinstance(value, date) and not isinstance(value, datetime):
         return value
-    if isinstance(value, str):
+    if isinstance(value, str) and ISO_DATE.match(value.strip()):
         try:
             return date.fromisoformat(value.strip())
         except ValueError:
             pass
-    raise _entry_error(index, entry, f"'expires' must be a date (YYYY-MM-DD), got {value!r}")
+    raise fail(f"'expires' must be a date (YYYY-MM-DD), got {value!r}")
 
 
 def _parse_entry(index: int, entry: object) -> Exclusion:
+    def fail(problem: str) -> ConfigurationError:
+        return _entry_error(index, entry, problem)
+
     if not isinstance(entry, dict):
-        raise _entry_error(index, entry, "must be a mapping")
+        raise fail("must be a mapping")
     unknown = sorted(str(key) for key in entry if key not in KNOWN_KEYS)
     if unknown:
-        raise _entry_error(index, entry, f"unknown key(s): {', '.join(unknown)}")
-    rule = _required_text(entry, "rule", index)
-    resource = _optional_text(entry, "resource", index)
-    file = _optional_text(entry, "file", index)
+        raise fail(f"unknown key(s): {', '.join(unknown)}")
+    rule = _text(entry, "rule", fail, required=True)
+    resource = _text(entry, "resource", fail, required=False)
+    file = _text(entry, "file", fail, required=False)
     if resource is None and file is None:
-        raise _entry_error(index, entry, "at least one of 'resource' or 'file' is required")
+        raise fail("at least one of 'resource' or 'file' is required")
     if resource is not None:
         resource_type, _, resource_name = resource.partition(".")
         if not resource_type or not resource_name:
-            raise _entry_error(index, entry, f"'resource' must be 'type.name', got {resource!r}")
+            raise fail(f"'resource' must be 'type.name', got {resource!r}")
     if file is not None:
         file = os.path.normpath(file).replace(os.sep, "/")
+    assert rule is not None
+    reason = _text(entry, "reason", fail, required=True)
+    approved_by = _text(entry, "approved_by", fail, required=True)
+    assert reason is not None and approved_by is not None
     return Exclusion(
         rule=rule,
         resource=resource,
         file=file,
-        reason=_required_text(entry, "reason", index),
-        expires=_expiry(entry, index),
-        approved_by=_required_text(entry, "approved_by", index),
+        reason=reason,
+        expires=_expiry(entry.get("expires"), fail),
+        approved_by=approved_by,
     )
 
 
@@ -175,23 +180,22 @@ def load_exclusions(path: Path) -> list[Exclusion]:
 def apply_exclusions(
     findings: list[Finding], exclusions: list[Exclusion], today: date
 ) -> tuple[list[Finding], list[ExcludedFinding], list[StaleExclusion]]:
-    """Split Findings into those that still count and those an active Exclusion covers,
-    and list the Exclusions that are stale: expired, or matching nothing in this scan."""
+    """Split Findings into those that still count and those an active Exclusion covers
+    (the first matching entry in file order), and list the Stale exclusions: expired
+    ones, and active ones that match no Finding in this scan at all."""
+    active = [exclusion for exclusion in exclusions if exclusion.active_on(today)]
     counted: list[Finding] = []
     excluded: list[ExcludedFinding] = []
-    matched: set[int] = set()
-    active = [(i, e) for i, e in enumerate(exclusions) if e.active_on(today)]
     for finding in findings:
-        cover = next(((i, e) for i, e in active if e.matches(finding)), None)
-        if cover is None:
+        covering = next((e for e in active if e.matches(finding)), None)
+        if covering is None:
             counted.append(finding)
         else:
-            matched.add(cover[0])
-            excluded.append(ExcludedFinding(finding=finding, exclusion=cover[1]))
+            excluded.append(ExcludedFinding(finding=finding, exclusion=covering))
     stale: list[StaleExclusion] = []
-    for index, exclusion in enumerate(exclusions):
+    for exclusion in exclusions:
         if not exclusion.active_on(today):
             stale.append(StaleExclusion(exclusion=exclusion, why="expired"))
-        elif index not in matched:
+        elif not any(exclusion.matches(finding) for finding in findings):
             stale.append(StaleExclusion(exclusion=exclusion, why="unmatched"))
     return counted, excluded, stale

@@ -26,17 +26,20 @@ def _location(finding: Finding) -> str:
 
 
 def _resource(finding: Finding) -> str:
-    if finding.resource_type and finding.resource_name:
-        return f"`{finding.resource_type}.{finding.resource_name}`"
-    return f"`{finding.resource_name}`" if finding.resource_name else "—"
+    address = finding.resource_address or finding.resource_name
+    return f"`{address}`" if address else "—"
 
 
 def _rule(finding: Finding) -> str:
     return f"{finding.rule_name} (`{finding.rule_id}`)"
 
 
+def _finding_cells(finding: Finding) -> str:
+    return f"{finding.severity} | {_rule(finding)} | {_location(finding)} | {_resource(finding)}"
+
+
 def _findings_table(findings: Iterable[Finding]) -> str:
-    rows = [f"| {f.severity} | {_rule(f)} | {_location(f)} | {_resource(f)} |" for f in findings]
+    rows = [f"| {_finding_cells(f)} |" for f in findings]
     return "\n".join([FINDINGS_TABLE_HEADER, *rows])
 
 
@@ -46,8 +49,7 @@ def _cell(text: str) -> str:
 
 def _excluded_table(excluded: Iterable[ExcludedFinding]) -> str:
     rows = [
-        f"| {e.finding.severity} | {_rule(e.finding)} | {_location(e.finding)} "
-        f"| {_resource(e.finding)} | {_cell(e.exclusion.reason)} "
+        f"| {_finding_cells(e.finding)} | {_cell(e.exclusion.reason)} "
         f"| {_cell(e.exclusion.approved_by)} | {e.exclusion.expires.isoformat()} |"
         for e in excluded
     ]
@@ -116,7 +118,8 @@ def render_summary(verdict: Verdict, config: Config) -> str:
             "",
             _stale_table(verdict.stale_exclusions),
             "",
-            "Stale entries are reported, never dropped: remove or renew them in `.fcs-gate.yml`.",
+            "Stale exclusions are reported, never dropped: remove or renew them in "
+            "`.fcs-gate.yml`.",
             "",
         ]
 
