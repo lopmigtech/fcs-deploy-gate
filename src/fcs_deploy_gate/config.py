@@ -98,15 +98,23 @@ def parse_blocking_threshold(value: str) -> frozenset[str]:
 
 
 def _symlink_within(work_dir: Path) -> bool:
-    """True when the work directory, or any component of it that the Gate itself would
-    create or traverse, is a symlink. A relative path is checked component by component
-    from the current directory, which inside a checkout is where a Consumer could plant
-    one; an absolute path is an adapter's choice, so only its final component is checked.
+    """True when the work directory, or any component of it below the current directory,
+    is a symlink. Inside a checkout the current directory is where a Consumer could plant
+    one, so every component from there down is checked, whether the path was given as
+    relative or absolute. Components above the current directory are the host's own
+    (``/tmp`` is a link on some systems), so only the final component is checked there.
+    The literal path is walked, never a resolved one, which would hide the links sought.
     """
     if work_dir.is_absolute():
-        return work_dir.is_symlink()
-    seen = Path()
-    for part in work_dir.parts:
+        base = Path.cwd()
+        try:
+            below = work_dir.relative_to(base)
+        except ValueError:
+            return work_dir.is_symlink()
+    else:
+        base, below = Path(), work_dir
+    seen = base
+    for part in below.parts:
         seen = seen / part
         if seen.is_symlink():
             return True

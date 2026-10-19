@@ -81,3 +81,18 @@ def test_relative_work_dir_under_a_symlinked_parent_is_a_configuration_error(
     assert "symlink" in result.stderr
     assert result.invocations == []
     assert not (elsewhere / "fcs-gate").exists()
+
+
+def test_absolute_work_dir_under_a_symlinked_parent_inside_cwd_is_a_configuration_error(
+    gate: GateHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "out").symlink_to(elsewhere)
+    monkeypatch.chdir(tmp_path)
+
+    result = gate("--work-dir", str(tmp_path / "out" / "fcs-gate"))
+
+    assert result.exit_code == 2
+    assert "symlink" in result.stderr
+    assert not (elsewhere / "fcs-gate").exists()
