@@ -205,8 +205,10 @@ CUSTOM_RULES_LINE = "Fetching custom rules from Falcon Cloud"
 class CloudRulesEvidence:
     """What shows the tenant's cloud rules were in force. The CLI silently falls back to
     local rules on a bad token or missing region, and the exit code and report then look
-    normal, so the Gate looks for the report's rule statistics (field names provisional
-    until the first live run) and for the line the CLI prints when it fetches the rules."""
+    normal, so the Gate requires the report's rule statistics (field names provisional
+    until the first live run). The line the CLI prints when it fetches the rules is
+    recorded for that run to calibrate against, never trusted on its own: CLI output can
+    echo content from the scanned tree."""
 
     rules_enabled: int | None
     total_rules: int | None
@@ -220,23 +222,23 @@ class CloudRulesEvidence:
         return cls(
             rules_enabled=_optional_int(rules.get("rules_enabled")),
             total_rules=_optional_int(rules.get("total_rules")),
-            custom_rules_fetched=CUSTOM_RULES_LINE in cli_stdout,
+            custom_rules_fetched=any(
+                line.strip() == CUSTOM_RULES_LINE for line in cli_stdout.splitlines()
+            ),
         )
 
     @property
     def sufficient(self) -> bool:
-        """``rules_enabled`` decides when present; ``total_rules`` only stands in for it;
-        the fetched-rules line is evidence on its own."""
+        """``rules_enabled`` decides when present; ``total_rules`` only stands in for it."""
         count = self.rules_enabled if self.rules_enabled is not None else self.total_rules
-        return self.custom_rules_fetched or (count is not None and count > 0)
+        return count is not None and count > 0
 
     def require(self) -> None:
         if not self.sufficient:
             raise ReportError(
                 "no evidence that the tenant's cloud rules were in force: stats.rule_stats is "
-                "missing or reports zero enabled rules and the CLI did not report fetching "
-                "custom rules (a bad token or missing region makes it fall back to local "
-                "rules silently)"
+                "missing or reports zero enabled rules (a bad token or missing region makes "
+                "the CLI fall back to local rules silently)"
             )
 
     def to_dict(self) -> dict[str, Any]:

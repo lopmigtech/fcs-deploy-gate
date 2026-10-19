@@ -366,7 +366,7 @@ def test_zero_enabled_rules_is_not_evidence_even_with_a_total(
     assert "cloud rules" in result.verdict["error"]
 
 
-def test_the_fetching_custom_rules_line_counts_as_evidence_and_is_recorded(
+def test_the_fetching_custom_rules_line_is_recorded_but_never_sufficient_alone(
     gate: GateHarness, tmp_path: Path
 ) -> None:
     import json
@@ -378,14 +378,13 @@ def test_the_fetching_custom_rules_line_counts_as_evidence_and_is_recorded(
     path = tmp_path / "no-rule-stats.json"
     path.write_text(json.dumps(report))
 
-    without_line = gate(report=path)
-    with_line = gate(report=path, env={"FAKE_FCS_SAY_FETCHING_RULES": "1"})
+    stats_missing = gate(report=path, env={"FAKE_FCS_SAY_FETCHING_RULES": "1"})
+    stats_present = gate(env={"FAKE_FCS_SAY_FETCHING_RULES": "1"})
 
-    assert "cloud rules" in without_line.verdict["error"]
-    assert with_line.verdict["error"] is None
-    assert with_line.verdict["cloud_rules_evidence"] == {
-        "rules_enabled": None,
-        "total_rules": None,
+    assert "cloud rules" in stats_missing.verdict["error"]  # CLI output can echo scanned text
+    assert stats_present.verdict["cloud_rules_evidence"] == {
+        "rules_enabled": 1850,
+        "total_rules": 1850,
         "custom_rules_fetched": True,
     }
 
