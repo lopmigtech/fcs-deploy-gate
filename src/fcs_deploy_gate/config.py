@@ -33,6 +33,7 @@ class Config:
     blocking_threshold: frozenset[str]
     work_dir: Path
     fcs_binary: Path
+    block_on_unscanned_files: bool
 
     @property
     def enforcing(self) -> bool:
@@ -66,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated severities that block. Must include critical, high and medium; "
             "informational may be added."
+        ),
+    )
+    parser.add_argument(
+        "--block-on-unscanned-files",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Block when the report says the CLI failed to scan one or more files (default). "
+            "--no-block-on-unscanned-files reports the count without blocking. Files the CLI "
+            "skips by design, such as gitignored ones, are not counted."
         ),
     )
     parser.add_argument(
@@ -154,4 +165,5 @@ def parse_args(argv: Sequence[str]) -> Config:
         blocking_threshold=parse_blocking_threshold(namespace.blocking_threshold),
         work_dir=work_dir,
         fcs_binary=fcs_binary,
+        block_on_unscanned_files=namespace.block_on_unscanned_files,
     )

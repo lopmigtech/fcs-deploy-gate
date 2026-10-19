@@ -166,6 +166,17 @@ def _policy_violation_findings(report: dict[str, Any], scan_root: Path) -> list[
     return findings
 
 
+def unscanned_file_count(report: dict[str, Any]) -> int:
+    """How many files the CLI says it failed to scan (``stats.files_stats.failed_to_scan``).
+    Gitignored files it skips by design are ``skipped``, not counted here. A report without
+    the statistic counts as zero."""
+    stats = report.get("stats")
+    files = stats.get("files_stats") if isinstance(stats, dict) else None
+    value = files.get("failed_to_scan") if isinstance(files, dict) else None
+    count = _optional_int(value)
+    return count if count is not None and count > 0 else 0
+
+
 def findings_from_report(report: dict[str, Any], scan_root: Path) -> list[Finding]:
     return [
         *_rule_detection_findings(report, scan_root),

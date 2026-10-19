@@ -72,6 +72,20 @@ def render_summary(verdict: Verdict, config: Config) -> str:
             "",
         ]
 
+    if verdict.unscanned_files:
+        consequence = (
+            "This blocks the Verdict (`--block-on-unscanned-files`, the default)."
+            if verdict.block_on_unscanned_files
+            else "Reported only (`--no-block-on-unscanned-files`)."
+        )
+        parts += [
+            f"## Files the CLI could not scan ({verdict.unscanned_files})",
+            "",
+            f"The CLI reported {verdict.unscanned_files} file(s) it failed to scan, so any "
+            f"Findings in them are unknown. {consequence}",
+            "",
+        ]
+
     parts += [
         "_A clear Verdict means no IaC Findings at or above the Blocking threshold; "
         "it does not yet guarantee that no IOM will appear (ADR 0005)._",

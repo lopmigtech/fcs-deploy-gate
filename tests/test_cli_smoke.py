@@ -19,7 +19,14 @@ def test_help_exits_0_and_names_the_inputs() -> None:
     )
 
     assert completed.returncode == 0
-    for option in ("--path", "--scope", "--mode", "--blocking-threshold", "--region"):
+    for option in (
+        "--path",
+        "--scope",
+        "--mode",
+        "--blocking-threshold",
+        "--region",
+        "--block-on-unscanned-files",
+    ):
         assert option in completed.stdout
 
 

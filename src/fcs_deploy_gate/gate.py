@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import TextIO
 
 from fcs_deploy_gate.config import Config, ConfigurationError, parse_args
-from fcs_deploy_gate.report import ReportError, findings_from_report, load_report
+from fcs_deploy_gate.report import (
+    ReportError,
+    findings_from_report,
+    load_report,
+    unscanned_file_count,
+)
 from fcs_deploy_gate.scan import ScanAttempt, scan_iac
 from fcs_deploy_gate.summary import render_summary
 from fcs_deploy_gate.verdict import Verdict, decide, verdict_document
@@ -67,21 +72,30 @@ def _advisory_warning(verdict: Verdict) -> str:
             "Advisory mode: the Gate could not scan, so the Verdict is blocked, "
             f"but the Deployment proceeds. {verdict.error}"
         )
+    reasons = [f"{len(verdict.blocking_findings)} Blocking findings"]
+    if verdict.blocked_by_unscanned_files:
+        reasons.append(f"{verdict.unscanned_files} files the CLI could not scan")
     return (
-        f"Advisory mode: the Verdict is blocked ({len(verdict.blocking_findings)} "
-        "Blocking findings) but the Deployment proceeds"
+        f"Advisory mode: the Verdict is blocked ({', '.join(reasons)}) but the Deployment proceeds"
     )
 
 
 def _judge(attempt: ScanAttempt, config: Config) -> Verdict:
     """Fail closed: a scan that did not complete, or a report the Gate cannot read, blocks."""
+    toggle = config.block_on_unscanned_files
     if not attempt.completed:
-        return Verdict(error=attempt.failure_message())
+        return Verdict(error=attempt.failure_message(), block_on_unscanned_files=toggle)
     try:
-        findings = findings_from_report(load_report(attempt.report_path), config.scan_path)
+        report = load_report(attempt.report_path)
+        findings = findings_from_report(report, config.scan_path)
     except ReportError as exc:
-        return Verdict(error=str(exc))
-    return decide(findings, config.blocking_threshold)
+        return Verdict(error=str(exc), block_on_unscanned_files=toggle)
+    return decide(
+        findings,
+        config.blocking_threshold,
+        unscanned_files=unscanned_file_count(report),
+        block_on_unscanned_files=toggle,
+    )
 
 
 def _terminated(content: str) -> str:

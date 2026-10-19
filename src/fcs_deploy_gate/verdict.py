@@ -15,10 +15,20 @@ class Verdict:
     blocking_findings: list[Finding] = field(default_factory=list)
     below_threshold: list[Finding] = field(default_factory=list)
     error: str | None = None
+    unscanned_files: int = 0
+    block_on_unscanned_files: bool = True
+
+    @property
+    def blocked_by_unscanned_files(self) -> bool:
+        return self.block_on_unscanned_files and self.unscanned_files > 0
 
     @property
     def blocked(self) -> bool:
-        return bool(self.blocking_findings) or self.error is not None
+        return (
+            bool(self.blocking_findings)
+            or self.error is not None
+            or self.blocked_by_unscanned_files
+        )
 
     @property
     def outcome(self) -> str:
@@ -35,11 +45,19 @@ def _ordering(finding: Finding) -> tuple[int, str, int, str, str]:
     )
 
 
-def decide(findings: Iterable[Finding], blocking_threshold: frozenset[str]) -> Verdict:
+def decide(
+    findings: Iterable[Finding],
+    blocking_threshold: frozenset[str],
+    *,
+    unscanned_files: int = 0,
+    block_on_unscanned_files: bool = True,
+) -> Verdict:
     ordered = sorted(findings, key=_ordering)
     return Verdict(
         blocking_findings=[f for f in ordered if f.severity in blocking_threshold],
         below_threshold=[f for f in ordered if f.severity not in blocking_threshold],
+        unscanned_files=unscanned_files,
+        block_on_unscanned_files=block_on_unscanned_files,
     )
 
 
@@ -52,5 +70,7 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "blocking_threshold": config.blocking_threshold_ordered,
         "blocking_findings": [f.to_dict() for f in verdict.blocking_findings],
         "below_threshold": [f.to_dict() for f in verdict.below_threshold],
+        "unscanned_files": verdict.unscanned_files,
+        "block_on_unscanned_files": verdict.block_on_unscanned_files,
         "error": verdict.error,
     }
