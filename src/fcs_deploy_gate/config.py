@@ -97,6 +97,22 @@ def parse_blocking_threshold(value: str) -> frozenset[str]:
     return frozenset(severities)
 
 
+def _symlink_within(work_dir: Path) -> bool:
+    """True when the work directory, or any component of it that the Gate itself would
+    create or traverse, is a symlink. A relative path is checked component by component
+    from the current directory, which inside a checkout is where a Consumer could plant
+    one; an absolute path is an adapter's choice, so only its final component is checked.
+    """
+    if work_dir.is_absolute():
+        return work_dir.is_symlink()
+    seen = Path()
+    for part in work_dir.parts:
+        seen = seen / part
+        if seen.is_symlink():
+            return True
+    return False
+
+
 def parse_args(argv: Sequence[str]) -> Config:
     namespace = build_parser().parse_args(list(argv))
 
@@ -115,9 +131,10 @@ def parse_args(argv: Sequence[str]) -> Config:
         raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
 
     work_dir = Path(namespace.work_dir)
-    if work_dir.is_symlink():
+    if _symlink_within(work_dir):
         raise ConfigurationError(
-            f"--work-dir {namespace.work_dir!r} is a symlink; the Gate will not write through it"
+            f"--work-dir {namespace.work_dir!r} is or lies under a symlink; "
+            "the Gate will not write through it"
         )
 
     return Config(
