@@ -37,6 +37,8 @@ def test_cli_error_in_advisory_mode_exits_0_with_a_warning(gate: GateHarness) ->
     assert result.verdict["verdict"] == "blocked"
     assert "201" in result.verdict["error"]
     assert "warning" in result.stderr.lower()
+    assert "exited with code 201" in result.stderr  # the outage, not the change, is named
+    assert "0 Blocking findings" not in result.stderr
 
 
 @pytest.mark.parametrize("exit_code", [0, 40])
@@ -87,3 +89,15 @@ def test_low_severity_normalises_to_informational(gate: GateHarness, tmp_path: P
 
     severities = [f["severity"] for f in result.verdict["below_threshold"]]
     assert severities == ["informational", "informational"]
+
+
+def test_a_report_left_by_an_earlier_run_is_never_judged_again(gate: GateHarness) -> None:
+    first = gate()
+    assert first.verdict["error"] is None
+    assert len(first.verdict["blocking_findings"]) == 6
+
+    second = gate(exit_code=0, no_report=True)  # same work directory, CLI writes nothing
+
+    assert second.exit_code == 1
+    assert second.verdict["blocking_findings"] == []
+    assert "wrote no report" in second.verdict["error"]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +16,11 @@ MODES: tuple[str, ...] = ("enforcing", "advisory")
 
 class ConfigurationError(Exception):
     """A mistake in how the Gate was invoked. Fails loudly in both modes."""
+
+
+def ordered_severities(severities: Iterable[str]) -> list[str]:
+    """Severities from most to least severe, the order every table and message uses."""
+    return sorted(severities, key=SEVERITIES.index)
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,10 @@ class Config:
     @property
     def enforcing(self) -> bool:
         return self.mode == "enforcing"
+
+    @property
+    def blocking_threshold_ordered(self) -> list[str]:
+        return ordered_severities(self.blocking_threshold)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -53,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", default="enforcing", choices=MODES, help="Gate mode.")
     parser.add_argument(
         "--blocking-threshold",
-        default=",".join(sorted(DEFAULT_BLOCKING_THRESHOLD, key=SEVERITIES.index)),
+        default=",".join(ordered_severities(DEFAULT_BLOCKING_THRESHOLD)),
         help=(
             "Comma-separated severities that block. Must include critical, high and medium; "
             "informational may be added."
@@ -80,7 +89,7 @@ def parse_blocking_threshold(value: str) -> frozenset[str]:
             f"unknown severity in --blocking-threshold: {', '.join(unknown)} "
             f"(allowed: {', '.join(SEVERITIES)})"
         )
-    missing = sorted(DEFAULT_BLOCKING_THRESHOLD - severities, key=SEVERITIES.index)
+    missing = ordered_severities(DEFAULT_BLOCKING_THRESHOLD - severities)
     if missing:
         raise ConfigurationError(
             f"--blocking-threshold may be tightened but not loosened; missing: {', '.join(missing)}"

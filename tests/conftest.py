@@ -4,8 +4,8 @@ import io
 import json
 import os
 import socket
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +27,8 @@ class GateRun:
     stderr: str
     work_dir: Path
     fake_record: Path
-    outputs_file: Path
-    summary_file: Path
+    github_output_file: Path
+    step_summary_file: Path
 
     @property
     def verdict(self) -> dict[str, Any]:
@@ -50,7 +50,6 @@ class GateRun:
 class GateHarness:
     tmp_path: Path
     scan_root: Path
-    extra_env: dict[str, str] = field(default_factory=dict)
 
     def __call__(
         self,
@@ -62,14 +61,14 @@ class GateHarness:
     ) -> GateRun:
         work_dir = self.tmp_path / "work"
         fake_record = self.tmp_path / "fake-fcs-invocations.jsonl"
-        outputs_file = self.tmp_path / "github_output"
-        summary_file = self.tmp_path / "github_step_summary"
+        github_output_file = self.tmp_path / "github_output"
+        step_summary_file = self.tmp_path / "github_step_summary"
         run_env: dict[str, str] = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(self.tmp_path),
             "FAKE_FCS_RECORD": str(fake_record),
-            "GITHUB_OUTPUT": str(outputs_file),
-            "GITHUB_STEP_SUMMARY": str(summary_file),
+            "GITHUB_OUTPUT": str(github_output_file),
+            "GITHUB_STEP_SUMMARY": str(step_summary_file),
         }
         if report is not None:
             report_path = Path(report)
@@ -80,7 +79,6 @@ class GateHarness:
             run_env["FAKE_FCS_EXIT_CODE"] = str(exit_code)
         if no_report:
             run_env["FAKE_FCS_NO_REPORT"] = "1"
-        run_env.update(self.extra_env)
         if env:
             run_env.update(env)
 
@@ -103,8 +101,8 @@ class GateHarness:
             stderr=stderr.getvalue(),
             work_dir=work_dir,
             fake_record=fake_record,
-            outputs_file=outputs_file,
-            summary_file=summary_file,
+            github_output_file=github_output_file,
+            step_summary_file=step_summary_file,
         )
 
 
@@ -133,6 +131,3 @@ def scan_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def gate(tmp_path: Path, scan_root: Path) -> GateHarness:
     return GateHarness(tmp_path=tmp_path, scan_root=scan_root)
-
-
-Gate = Callable[..., GateRun]

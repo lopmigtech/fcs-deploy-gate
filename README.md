@@ -10,9 +10,10 @@ What exists today is Whole-tree Scope through the run entry point, exercised wit
 
 ```sh
 fcs-deploy-gate --path infra/prod --region us-gov-1 [--mode enforcing|advisory] \
-    [--blocking-threshold critical,high,medium[,informational]] [--work-dir fcs-gate] \
-    --fcs-binary /path/to/fcs
+    [--blocking-threshold critical,high,medium[,informational]] [--work-dir fcs-gate]
 ```
+
+Until the pinned CLI download lands (ticket 5), the Gate refuses to run unless `--fcs-binary` names an `fcs` executable. That flag is the seam the test suite uses to substitute the fake CLI; adapters must never forward it.
 
 1. **The scan.** The Gate launches `fcs scan iac` from the scanned directory with a JSON report, `--fail-on` set to count every severity, and the Falcon region. The CLI never receives the Falcon client id or secret in its environment; the Gate strips them before launching it.
 2. **A result or an error.** A scan attempt counts as a result only when the CLI exits 0 or 40 and the report parses. Any other exit code, a missing report, or a report the Gate cannot interpret is a blocked Verdict carrying an error message. The Gate fails closed and has no bypass (ADR 0001).

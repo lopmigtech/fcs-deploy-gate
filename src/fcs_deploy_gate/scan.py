@@ -59,6 +59,9 @@ def scan_iac(
     env: Mapping[str, str],
 ) -> ScanAttempt:
     report_path = (work_dir / REPORT_FILENAME).resolve()
+    # A report left by an earlier run in a reused workspace must never be judged as this
+    # run's result (ADR 0001): only what this invocation writes counts.
+    report_path.unlink(missing_ok=True)
     command = [
         str(fcs_binary),
         "scan",

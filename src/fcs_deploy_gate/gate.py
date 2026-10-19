@@ -46,6 +46,9 @@ def run(
     document = json.dumps(verdict_document(verdict, config), indent=2)
     _write(config.work_dir / VERDICT_FILENAME, document)
     _write(config.work_dir / SUMMARY_FILENAME, summary)
+    # GitHub's output and summary files are plain appends the core can do without any
+    # platform logic, which keeps the GitHub adapter thin (ADR 0004). GitLab reads the
+    # job log and the work directory instead.
     _append(env.get("GITHUB_STEP_SUMMARY"), summary)
     _append(
         env.get("GITHUB_OUTPUT"),
@@ -54,11 +57,20 @@ def run(
     stdout.write(summary)
 
     if verdict.blocked and not config.enforcing:
-        stderr.write(
-            "fcs-deploy-gate: warning: Advisory mode: the Verdict is blocked "
-            f"({len(verdict.blocking_findings)} Blocking findings) but the Deployment proceeds\n"
-        )
+        stderr.write(f"fcs-deploy-gate: warning: {_advisory_warning(verdict)}\n")
     return 1 if verdict.blocked and config.enforcing else 0
+
+
+def _advisory_warning(verdict: Verdict) -> str:
+    if verdict.error is not None:
+        return (
+            "Advisory mode: the Gate could not scan, so the Verdict is blocked, "
+            f"but the Deployment proceeds. {verdict.error}"
+        )
+    return (
+        f"Advisory mode: the Verdict is blocked ({len(verdict.blocking_findings)} "
+        "Blocking findings) but the Deployment proceeds"
+    )
 
 
 def _judge(attempt: ScanAttempt, config: Config) -> Verdict:
@@ -72,15 +84,19 @@ def _judge(attempt: ScanAttempt, config: Config) -> Verdict:
     return decide(findings, config.blocking_threshold)
 
 
+def _terminated(content: str) -> str:
+    return content.rstrip("\n") + "\n"
+
+
 def _write(path: Path, content: str) -> None:
-    path.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
+    path.write_text(_terminated(content), encoding="utf-8")
 
 
 def _append(path: str | None, content: str) -> None:
     if not path:
         return
     with open(path, "a", encoding="utf-8") as handle:
-        handle.write(content.rstrip("\n") + "\n")
+        handle.write(_terminated(content))
 
 
 def main() -> int:

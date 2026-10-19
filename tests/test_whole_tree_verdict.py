@@ -13,7 +13,7 @@ def test_clean_report_is_a_clear_verdict_and_exits_0(gate: GateHarness) -> None:
     assert result.verdict["blocking_findings"] == []
 
 
-def identity(finding: dict[str, object]) -> tuple[object, ...]:
+def observed(finding: dict[str, object]) -> tuple[object, ...]:
     return (
         finding["severity"],
         finding["rule_id"],
@@ -68,12 +68,12 @@ UNTAGGED_PUBLIC_BUCKET = (
 )
 
 
-def test_enforcing_whole_tree_blocks_on_five_findings_and_exits_1(gate: GateHarness) -> None:
+def test_enforcing_whole_tree_blocks_on_six_findings_and_exits_1(gate: GateHarness) -> None:
     result = gate()
 
     assert result.exit_code == 1
     assert result.verdict["verdict"] == "blocked"
-    assert sorted(map(identity, result.verdict["blocking_findings"]), key=str) == sorted(
+    assert sorted(map(observed, result.verdict["blocking_findings"]), key=str) == sorted(
         [
             PUBLIC_BUCKET,
             UNENCRYPTED_PUBLIC_BUCKET,
@@ -84,7 +84,7 @@ def test_enforcing_whole_tree_blocks_on_five_findings_and_exits_1(gate: GateHarn
         ],
         key=str,
     )
-    assert [identity(f) for f in result.verdict["below_threshold"]] == [UNTAGGED_PUBLIC_BUCKET]
+    assert [observed(f) for f in result.verdict["below_threshold"]] == [UNTAGGED_PUBLIC_BUCKET]
 
 
 def test_advisory_mode_reports_the_same_blocked_verdict_but_exits_0(gate: GateHarness) -> None:
@@ -106,7 +106,7 @@ def test_adding_informational_to_the_threshold_makes_the_tagging_finding_block(
     result = gate("--blocking-threshold", "critical,high,medium,informational")
 
     assert result.exit_code == 1
-    assert UNTAGGED_PUBLIC_BUCKET in [identity(f) for f in result.verdict["blocking_findings"]]
+    assert UNTAGGED_PUBLIC_BUCKET in [observed(f) for f in result.verdict["blocking_findings"]]
     assert result.verdict["below_threshold"] == []
     assert result.verdict["blocking_threshold"] == ["critical", "high", "medium", "informational"]
 

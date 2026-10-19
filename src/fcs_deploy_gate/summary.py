@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from fcs_deploy_gate.config import SEVERITIES, Config
+from fcs_deploy_gate.config import Config
 from fcs_deploy_gate.report import Finding
 from fcs_deploy_gate.verdict import Verdict
 
@@ -35,7 +35,7 @@ def _findings_table(findings: Iterable[Finding]) -> str:
 
 
 def render_summary(verdict: Verdict, config: Config) -> str:
-    threshold = ", ".join(sorted(config.blocking_threshold, key=SEVERITIES.index))
+    threshold = ", ".join(config.blocking_threshold_ordered)
     parts = [
         f"# fcs-deploy-gate: Verdict **{verdict.outcome}**",
         "",

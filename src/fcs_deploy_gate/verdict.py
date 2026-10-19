@@ -49,7 +49,7 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "mode": config.mode,
         "scope": config.scope,
         "path": config.scan_path_as_given,
-        "blocking_threshold": sorted(config.blocking_threshold, key=SEVERITIES.index),
+        "blocking_threshold": config.blocking_threshold_ordered,
         "blocking_findings": [f.to_dict() for f in verdict.blocking_findings],
         "below_threshold": [f.to_dict() for f in verdict.below_threshold],
         "error": verdict.error,

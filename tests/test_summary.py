@@ -53,11 +53,11 @@ def test_github_output_and_step_summary_are_appended_to(gate: GateHarness) -> No
 
     result = gate()
 
-    outputs = result.outputs_file.read_text()
+    outputs = result.github_output_file.read_text()
     assert outputs.startswith("earlier=kept\n")
     assert "verdict=blocked\n" in outputs
     assert "blocking_count=6\n" in outputs
-    step_summary = result.summary_file.read_text()
+    step_summary = result.step_summary_file.read_text()
     assert step_summary.startswith("# Earlier step\n")
     assert result.summary.strip() in step_summary
 
@@ -66,5 +66,5 @@ def test_github_files_are_not_required(gate: GateHarness) -> None:
     result = gate(env={"GITHUB_OUTPUT": "", "GITHUB_STEP_SUMMARY": ""})
 
     assert result.exit_code == 1
-    assert not result.outputs_file.exists()
-    assert not result.summary_file.exists()
+    assert not result.github_output_file.exists()
+    assert not result.step_summary_file.exists()

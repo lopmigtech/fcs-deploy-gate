@@ -86,7 +86,7 @@ def normalise_path(value: str | None, scan_root: Path) -> str | None:
     return value
 
 
-def _list(report: dict[str, Any], *keys: str) -> list[Any]:
+def _nested_list(report: dict[str, Any], *keys: str) -> list[Any]:
     node: Any = report
     for key in keys:
         if not isinstance(node, dict):
@@ -97,7 +97,7 @@ def _list(report: dict[str, Any], *keys: str) -> list[Any]:
 
 def _rule_detection_findings(report: dict[str, Any], scan_root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for rule in _list(report, "rule_detections"):
+    for rule in _nested_list(report, "rule_detections"):
         if not isinstance(rule, dict):
             continue
         rule_uuid = rule.get("rule_uuid")
@@ -123,7 +123,7 @@ def _rule_detection_findings(report: dict[str, Any], scan_root: Path) -> list[Fi
 
 def _secret_findings(report: dict[str, Any], scan_root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for secret in _list(report, "secrets_analysis", "secrets"):
+    for secret in _nested_list(report, "secrets_analysis", "secrets"):
         if not isinstance(secret, dict):
             continue
         secret_type = str(secret.get("type") or "unknown")
@@ -146,7 +146,7 @@ def _secret_findings(report: dict[str, Any], scan_root: Path) -> list[Finding]:
 
 def _policy_violation_findings(report: dict[str, Any], scan_root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for violation in _list(report, "policy_violations"):
+    for violation in _nested_list(report, "policy_violations"):
         if not isinstance(violation, dict):
             continue
         policy_id = str(violation.get("policy_id") or "unknown")
