@@ -26,6 +26,9 @@ class Verdict:
     error: str | None = None
     unscanned_files: int = 0
     block_on_unscanned_files: bool = True
+    baseline_ref: str | None = None
+    total_findings: int = 0
+    new_findings: int = 0
 
     @property
     def blocked_by_unscanned_files(self) -> bool:
@@ -60,11 +63,20 @@ def decide(
     *,
     exclusions: list[Exclusion],
     today: date,
+    baseline: Iterable[Finding] | None = None,
+    baseline_ref: str | None = None,
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
 ) -> Verdict:
+    """Whole-tree when ``baseline`` is None; otherwise Change-aware: only Findings whose
+    identity is absent from the Baseline are considered (ADR 0002)."""
     ordered = sorted(findings, key=_ordering)
-    counted, excluded, stale = apply_exclusions(ordered, exclusions, today)
+    if baseline is None:
+        considered = ordered
+    else:
+        known = {finding.identity for finding in baseline}
+        considered = [f for f in ordered if f.identity not in known]
+    counted, excluded, stale = apply_exclusions(considered, exclusions, today, present=ordered)
     return Verdict(
         blocking_findings=[f for f in counted if f.severity in blocking_threshold],
         below_threshold=[f for f in counted if f.severity not in blocking_threshold],
@@ -72,6 +84,9 @@ def decide(
         stale_exclusions=stale,
         unscanned_files=unscanned_files,
         block_on_unscanned_files=block_on_unscanned_files,
+        baseline_ref=baseline_ref,
+        total_findings=len(ordered),
+        new_findings=len(considered),
     )
 
 
@@ -81,6 +96,9 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "mode": config.mode,
         "scope": config.scope,
         "path": config.scan_path_as_given,
+        "baseline_ref": verdict.baseline_ref,
+        "total_findings": verdict.total_findings,
+        "new_findings": verdict.new_findings,
         "blocking_threshold": config.blocking_threshold_ordered,
         "blocking_findings": [f.to_dict() for f in verdict.blocking_findings],
         "below_threshold": [f.to_dict() for f in verdict.below_threshold],

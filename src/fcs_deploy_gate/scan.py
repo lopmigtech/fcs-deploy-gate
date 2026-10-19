@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPORT_FILENAME = "fcs-report.json"
+BASELINE_REPORT_FILENAME = "fcs-report-baseline.json"
 # The only exit codes every CrowdStrike source agrees mean "scan completed"
 # (docs/research/fcs-iac-scan-contract.md, section 2).
 RESULT_EXIT_CODES: frozenset[int] = frozenset({0, 40})
@@ -57,11 +58,16 @@ def scan_iac(
     region: str,
     work_dir: Path,
     env: Mapping[str, str],
+    upload: bool,
+    project_name: str | None = None,
+    report_filename: str = REPORT_FILENAME,
 ) -> ScanAttempt:
+    """One ``fcs scan iac`` of ``scan_path``. Only the scan of the change is uploaded to
+    the console; a Baseline scan never is (ADR 0002)."""
     # A report left by an earlier run in a reused workspace must never be judged as this
     # run's result (ADR 0001): only what this invocation writes counts. The entry is
     # unlinked before the path is resolved, so a planted symlink is removed, never followed.
-    report_path = work_dir / REPORT_FILENAME
+    report_path = work_dir / report_filename
     report_path.unlink(missing_ok=True)
     report_path = report_path.resolve()
     command = [
@@ -81,6 +87,10 @@ def scan_iac(
         "--falcon-region",
         region,
     ]
+    if upload:
+        command += ["--upload-results"]
+        if project_name:
+            command += ["--project-name", project_name]
     completed = subprocess.run(
         command,
         cwd=scan_path,

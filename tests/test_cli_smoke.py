@@ -12,7 +12,7 @@ from tests.conftest import FAKE_FCS, FIXTURE_REPORTS
 
 def test_help_exits_0_and_names_the_inputs() -> None:
     completed = subprocess.run(
-        [sys.executable, "-m", "fcs_deploy_gate", "--help"],
+        [sys.executable, "-m", "fcs_deploy_gate", "run", "--help"],
         capture_output=True,
         text=True,
         check=False,
@@ -45,6 +45,7 @@ def test_console_entry_point_runs_the_gate_end_to_end(tmp_path: Path) -> None:
             sys.executable,
             "-m",
             "fcs_deploy_gate",
+            "run",
             "--path",
             str(scan_root),
             "--region",

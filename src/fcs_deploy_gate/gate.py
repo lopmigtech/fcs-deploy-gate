@@ -8,8 +8,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
+from fcs_deploy_gate.baseline import (
+    EXPLICIT_REF_HINT,
+    BaselineCandidates,
+    BaselineError,
+    resolve_baseline,
+)
 from fcs_deploy_gate.config import Config, ConfigurationError, parse_args
 from fcs_deploy_gate.exclusions import (
     EXCLUSION_FILENAME,
@@ -18,12 +24,13 @@ from fcs_deploy_gate.exclusions import (
     repository_root,
 )
 from fcs_deploy_gate.report import (
+    Finding,
     ReportError,
     findings_from_report,
     load_report,
     unscanned_file_count,
 )
-from fcs_deploy_gate.scan import ScanAttempt, scan_iac
+from fcs_deploy_gate.scan import BASELINE_REPORT_FILENAME, ScanAttempt, scan_iac
 from fcs_deploy_gate.summary import render_summary
 from fcs_deploy_gate.verdict import Verdict, decide, verdict_document
 
@@ -43,6 +50,8 @@ def run(
     today = today or datetime.now(UTC).date()
     try:
         config = parse_args(argv)
+        if isinstance(config, BaselineCandidates):
+            return _resolve_baseline_command(config, stdout)
         root = repository_root(config.scan_path)
         if not (root / ".git").exists():
             stderr.write(
@@ -55,14 +64,8 @@ def run(
         return 2
 
     config.work_dir.mkdir(parents=True, exist_ok=True)
-    attempt = scan_iac(
-        fcs_binary=config.fcs_binary,
-        scan_path=config.scan_path,
-        region=config.region,
-        work_dir=config.work_dir,
-        env=env,
-    )
-    verdict = _judge(attempt, config, exclusions, today)
+    project_name = config.project_name or root.resolve().name
+    verdict = _scan_and_judge(config, env, exclusions, today, project_name)
     summary = render_summary(verdict, config)
 
     document = json.dumps(verdict_document(verdict, config), indent=2)
@@ -97,26 +100,92 @@ def _advisory_warning(verdict: Verdict) -> str:
     )
 
 
-def _judge(
-    attempt: ScanAttempt, config: Config, exclusions: list[Exclusion], today: date
-) -> Verdict:
-    """Fail closed: a scan that did not complete, or a report the Gate cannot read, blocks."""
-    toggle = config.block_on_unscanned_files
-    if not attempt.completed:
-        return Verdict(error=attempt.failure_message(), block_on_unscanned_files=toggle)
+def _resolve_baseline_command(candidates: BaselineCandidates, stdout: TextIO) -> int:
+    """One line of KEY=VALUE either way, so an adapter can append it to its outputs file
+    and hand the result to ``run`` without any logic of its own (ADR 0004)."""
     try:
-        report = load_report(attempt.report_path)
+        stdout.write(f"ref={resolve_baseline(candidates)}\n")
+    except BaselineError as exc:
+        stdout.write(f"error={exc}\n")
+    return 0
+
+
+def _scan_and_judge(
+    config: Config,
+    env: Mapping[str, str],
+    exclusions: list[Exclusion],
+    today: date,
+    project_name: str,
+) -> Verdict:
+    """Fail closed (ADR 0001): a Baseline that cannot be used, a scan that did not
+    complete, or a report the Gate cannot read, blocks."""
+    toggle = config.block_on_unscanned_files
+    baseline: list[Finding] | None = None
+    if config.change_aware:
+        if config.baseline_error:
+            return Verdict(error=config.baseline_error, block_on_unscanned_files=toggle)
+        if config.baseline_dir is None or not config.baseline_dir.is_dir():
+            where = f" ({config.baseline_dir} is not a directory)" if config.baseline_dir else ""
+            return Verdict(
+                error=(
+                    f"Change-aware Scope needs a Baseline directory{where}; the adapter must "
+                    "check the Baseline ref out and pass --baseline-dir, or the Consumer must "
+                    f"{EXPLICIT_REF_HINT}"
+                ),
+                baseline_ref=config.baseline_ref,
+                block_on_unscanned_files=toggle,
+            )
+        attempt = scan_iac(
+            fcs_binary=config.fcs_binary,
+            scan_path=config.baseline_dir,
+            region=config.region,
+            work_dir=config.work_dir,
+            env=env,
+            upload=False,
+            report_filename=BASELINE_REPORT_FILENAME,
+        )
+        try:
+            baseline = findings_from_report(_completed_report(attempt), config.baseline_dir)
+        except ReportError as exc:
+            return Verdict(
+                error=f"the Baseline scan did not produce a usable report: {exc}",
+                baseline_ref=config.baseline_ref,
+                block_on_unscanned_files=toggle,
+            )
+
+    attempt = scan_iac(
+        fcs_binary=config.fcs_binary,
+        scan_path=config.scan_path,
+        region=config.region,
+        work_dir=config.work_dir,
+        env=env,
+        upload=True,
+        project_name=project_name,
+    )
+    try:
+        report = _completed_report(attempt)
         findings = findings_from_report(report, config.scan_path)
     except ReportError as exc:
-        return Verdict(error=str(exc), block_on_unscanned_files=toggle)
+        return Verdict(
+            error=str(exc), baseline_ref=config.baseline_ref, block_on_unscanned_files=toggle
+        )
     return decide(
         findings,
         config.blocking_threshold,
         exclusions=exclusions,
         today=today,
+        baseline=baseline,
+        baseline_ref=config.baseline_ref if config.change_aware else None,
         unscanned_files=unscanned_file_count(report),
         block_on_unscanned_files=toggle,
     )
+
+
+def _completed_report(attempt: ScanAttempt) -> dict[str, Any]:
+    """The report of a completed scan; a scan that did not complete is a ReportError."""
+    if not attempt.completed:
+        raise ReportError(attempt.failure_message())
+    return load_report(attempt.report_path)
 
 
 def _terminated(content: str) -> str:

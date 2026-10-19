@@ -77,8 +77,13 @@ def render_summary(verdict: Verdict, config: Config) -> str:
         f"| Scope | {config.scope} |",
         f"| Path | `{config.scan_path_as_given}` |",
         f"| Blocking threshold | {threshold} |",
-        "",
     ]
+    if config.change_aware:
+        parts += [
+            f"| Baseline | `{verdict.baseline_ref or 'unresolved'}` |",
+            f"| Findings | {verdict.new_findings} new of {verdict.total_findings} total |",
+        ]
+    parts += [""]
     if verdict.error is not None:
         parts += ["## The Gate could not scan", "", f"> {verdict.error}", ""]
         parts += [

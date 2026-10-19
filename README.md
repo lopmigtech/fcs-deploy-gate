@@ -6,23 +6,38 @@ Vocabulary is defined in `GLOSSARY.md`; decisions with lasting consequences are 
 
 ## How the Gate decides
 
-What exists today is Whole-tree Scope through the run entry point with Exclusions, exercised with a fake CLI and fixture reports. Change-aware Scope and the pinned CLI download are tracked as later tickets.
+What exists today is both Scopes through the run entry point with Exclusions, exercised with a fake CLI and fixture reports. The pinned CLI download is a later ticket.
 
 ```sh
-fcs-deploy-gate --path infra/prod --region us-gov-1 [--mode enforcing|advisory] \
+fcs-deploy-gate run --path infra/prod --region us-gov-1 [--mode enforcing|advisory] \
+    [--scope whole-tree|change-aware] [--baseline-dir DIR --baseline-ref REF | --baseline-error MSG] \
     [--blocking-threshold critical,high,medium[,informational]] \
-    [--no-block-on-unscanned-files] [--work-dir fcs-gate]
+    [--no-block-on-unscanned-files] [--project-name NAME] [--work-dir fcs-gate]
 ```
 
 Until the pinned CLI download lands (ticket 5), the Gate refuses to run unless `--fcs-binary` names an `fcs` executable. That flag is the seam the test suite uses to substitute the fake CLI; adapters must never forward it.
 
-1. **The scan.** The Gate launches `fcs scan iac` from the scanned directory with a JSON report, `--fail-on` set to count every severity, and the Falcon region. The CLI never receives the Falcon client id or secret in its environment; the Gate strips them before launching it.
+1. **The scan.** The Gate launches `fcs scan iac` from the scanned directory with a JSON report, `--fail-on` set to count every severity, the Falcon region, and upload to the console enabled under the project name (default: the repository directory name). The CLI never receives the Falcon client id or secret in its environment; the Gate strips them before launching it.
 2. **A result or an error.** A scan attempt counts as a result only when the CLI exits 0 or 40 and the report parses. Any other exit code, a missing report, or a report the Gate cannot interpret is a blocked Verdict carrying an error message. The Gate fails closed and has no bypass (ADR 0001).
 3. **Findings.** The report's rule detections become Findings with rule id `iac/<rule_uuid>`. Secrets become high-severity Findings with rule id `secret/<type>`. Policy violations become Findings at their stated severity with rule id `policy/<id>`. Severities are lower-cased, `low` is read as `informational`, and anything else is a report error. File paths are normalised relative to the scanned root.
-4. **The Verdict.** A Finding at or above the Blocking threshold that no active Exclusion covers is a Blocking finding; any Blocking finding is a blocked Verdict. The threshold defaults to critical, high and medium. A Consumer may add informational but cannot remove any of the three defaults.
-5. **Files the CLI could not scan.** The report's count of files the CLI failed to scan is shown in the summary and the verdict document. By default a non-zero count blocks the Verdict, since Findings in those files are unknown; `--no-block-on-unscanned-files` reports the count without blocking. Files the CLI skips by design, such as gitignored ones, are not counted.
-6. **Exit codes.** Enforcing mode exits 1 on a blocked Verdict. Advisory mode reports the same Verdict, prints a warning, and exits 0. Any configuration mistake (threshold, scope, mode, region, scan path) exits 2 in both modes before a scan is attempted.
-7. **Outputs.** The work directory receives `verdict.json`, `summary.md` and the raw `fcs-report.json`. The summary is printed to the job log, appended to `GITHUB_STEP_SUMMARY` when that variable is set, and `verdict` plus `blocking_count` are appended to `GITHUB_OUTPUT`.
+4. **Scope.** In Whole-tree Scope (the default) every Finding in the scanned path is considered. In Change-aware Scope the Gate also scans the Baseline, the Consumer's source as it was before the change, and considers only Findings whose identity (rule id, normalised file, resource type, resource name; the line number is ignored) is absent from the Baseline. A resource that was renamed or moved is therefore new; one that only shifted lines is not. The Baseline scan is never uploaded. See "Baseline" below.
+5. **The Verdict.** A considered Finding at or above the Blocking threshold that no active Exclusion covers is a Blocking finding; any Blocking finding is a blocked Verdict. The threshold defaults to critical, high and medium. A Consumer may add informational but cannot remove any of the three defaults.
+6. **Files the CLI could not scan.** The report's count of files the CLI failed to scan is shown in the summary and the verdict document. By default a non-zero count blocks the Verdict, since Findings in those files are unknown; `--no-block-on-unscanned-files` reports the count without blocking. Files the CLI skips by design, such as gitignored ones, are not counted.
+7. **Exit codes.** Enforcing mode exits 1 on a blocked Verdict. Advisory mode reports the same Verdict, prints a warning, and exits 0. Any configuration mistake (threshold, scope, mode, region, scan path) exits 2 in both modes before a scan is attempted.
+8. **Outputs.** The work directory receives `verdict.json`, `summary.md`, the raw `fcs-report.json` and, in Change-aware Scope, `fcs-report-baseline.json`. The summary is printed to the job log, appended to `GITHUB_STEP_SUMMARY` when that variable is set, and `verdict` plus `blocking_count` are appended to `GITHUB_OUTPUT`.
+
+## Baseline
+
+Change-aware Scope needs the Baseline checked out in a second directory, which the adapter does and passes as `--baseline-dir`, with the ref as `--baseline-ref`. The ref comes from one place:
+
+```sh
+fcs-deploy-gate resolve-baseline --pipeline merge-request|branch \
+    --explicit-ref "$REF" --merge-base "$MERGE_BASE" --previous-commit "$BEFORE_SHA"
+```
+
+It prints one line, `ref=<ref>` or `error=<message>`, and exits 0 either way, so an adapter can append it to its outputs and pass the result on without logic of its own. The precedence is: an explicit ref the Consumer names wins; otherwise, in a merge-request or pull-request pipeline, the merge base with the target branch; otherwise, in a branch pipeline, the commit before the push. An empty value or an all-zeros commit is unusable. A first push to a branch has no previous commit, so it needs an explicit ref.
+
+An error line is passed to `run` as `--baseline-error`. A Change-aware run with a Baseline error, without a Baseline directory, or whose Baseline scan does not complete, is a blocked Verdict carrying the message (ADR 0001, ADR 0002): there is no way to fall back to scanning the whole tree silently. In Whole-tree Scope the Baseline inputs are ignored.
 
 ## Exclusions
 

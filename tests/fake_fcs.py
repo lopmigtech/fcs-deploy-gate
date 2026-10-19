@@ -7,6 +7,11 @@ path given after ``--output-path``, appends a JSON line describing the invocatio
 ``FAKE_FCS_EXIT_CODE`` (default 40, the CLI's "completed with findings" code).
 Set ``FAKE_FCS_NO_REPORT=1`` to write nothing, which together with an exit code such
 as 201 imitates a CLI failure.
+
+When the Gate scans more than once per run (a Baseline and the change), ``FAKE_FCS_REPORTS``
+and ``FAKE_FCS_EXIT_CODES`` give one value per invocation, ``os.pathsep``- and
+comma-separated respectively, consumed in order; the invocation index is the number of
+lines already in ``FAKE_FCS_RECORD``. The last value repeats when the list runs out.
 """
 
 import json
@@ -25,20 +30,34 @@ def output_path(argv: list[str]) -> Path | None:
     return None
 
 
+def nth(values: str, separator: str, index: int) -> str:
+    parts = values.split(separator)
+    return parts[min(index, len(parts) - 1)]
+
+
 def main() -> int:
     argv = sys.argv[1:]
     record = os.environ.get("FAKE_FCS_RECORD")
+    index = 0
     if record:
+        if os.path.exists(record):
+            with open(record, encoding="utf-8") as handle:
+                index = sum(1 for line in handle if line.strip())
         with open(record, "a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps({"argv": argv, "env": dict(os.environ), "cwd": os.getcwd()}) + "\n"
             )
 
-    exit_code = int(os.environ.get("FAKE_FCS_EXIT_CODE", "40"))
+    exit_codes = os.environ.get("FAKE_FCS_EXIT_CODES")
+    if exit_codes:
+        exit_code = int(nth(exit_codes, ",", index))
+    else:
+        exit_code = int(os.environ.get("FAKE_FCS_EXIT_CODE", "40"))
     if os.environ.get("FAKE_FCS_NO_REPORT") == "1":
         return exit_code
 
-    source = os.environ.get("FAKE_FCS_REPORT")
+    reports = os.environ.get("FAKE_FCS_REPORTS")
+    source = nth(reports, os.pathsep, index) if reports else os.environ.get("FAKE_FCS_REPORT")
     target = output_path(argv)
     if source and target is not None:
         if target.is_dir():

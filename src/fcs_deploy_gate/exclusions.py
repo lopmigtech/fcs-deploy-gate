@@ -178,11 +178,19 @@ def load_exclusions(path: Path) -> list[Exclusion]:
 
 
 def apply_exclusions(
-    findings: list[Finding], exclusions: list[Exclusion], today: date
+    findings: list[Finding],
+    exclusions: list[Exclusion],
+    today: date,
+    *,
+    present: list[Finding] | None = None,
 ) -> tuple[list[Finding], list[ExcludedFinding], list[StaleExclusion]]:
-    """Split Findings into those that still count and those an active Exclusion covers
-    (the first matching entry in file order), and list the Stale exclusions: expired
-    ones, and active ones that match no Finding in this scan at all."""
+    """Split the considered Findings into those that still count and those an active
+    Exclusion covers (the first matching entry in file order), and list the Stale
+    exclusions: expired ones, and active ones that match no Finding ``present`` in the
+    scan at all. ``present`` defaults to the considered Findings; in Change-aware Scope it
+    is every Finding of the change, so an entry covering a pre-existing Finding is not
+    reported stale."""
+    present = findings if present is None else present
     active = [exclusion for exclusion in exclusions if exclusion.active_on(today)]
     counted: list[Finding] = []
     excluded: list[ExcludedFinding] = []
@@ -196,6 +204,6 @@ def apply_exclusions(
     for exclusion in exclusions:
         if not exclusion.active_on(today):
             stale.append(StaleExclusion(exclusion=exclusion, why="expired"))
-        elif not any(exclusion.matches(finding) for finding in findings):
+        elif not any(exclusion.matches(finding) for finding in present):
             stale.append(StaleExclusion(exclusion=exclusion, why="unmatched"))
     return counted, excluded, stale

@@ -59,6 +59,11 @@ class GateHarness:
         """The Consumer repository root: tmp_path, where the scan_root fixture puts .git."""
         return self.tmp_path
 
+    @property
+    def baseline_dir(self) -> Path:
+        """Where the harness checks out the Baseline, as an adapter would."""
+        return self.tmp_path / "baseline"
+
     def write_exclusions(self, content: str) -> Path:
         path = self.repo_root / EXCLUSION_FILENAME
         path.write_text(content)
@@ -77,7 +82,13 @@ class GateHarness:
         no_report: bool = False,
         env: dict[str, str] | None = None,
         today: date | None = None,
+        baseline_report: str | Path | None = None,
+        baseline_ref: str | None = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        baseline_exit_code: int = 40,
     ) -> GateRun:
+        """Call the Gate. ``baseline_report`` switches the call to Change-aware Scope: a
+        Baseline directory is created, the fake CLI returns ``baseline_report`` for the
+        first (Baseline) scan and ``report`` for the second (change) scan."""
         self.calls += 1
         work_dir = self.tmp_path / "work"
         fake_record = self.tmp_path / f"fake-fcs-invocations-{self.calls}.jsonl"
@@ -91,18 +102,27 @@ class GateHarness:
             "GITHUB_STEP_SUMMARY": str(step_summary_file),
         }
         if report is not None:
-            report_path = Path(report)
-            if not report_path.is_absolute():
-                report_path = FIXTURE_REPORTS / report_path
-            run_env["FAKE_FCS_REPORT"] = str(report_path)
+            run_env["FAKE_FCS_REPORT"] = str(fixture_report(report))
         if exit_code is not None:
             run_env["FAKE_FCS_EXIT_CODE"] = str(exit_code)
+        scope_args: list[str] = []
+        if baseline_report is not None:
+            self.baseline_dir.mkdir(exist_ok=True)
+            (self.baseline_dir / "logging.tf").write_text('resource "aws_s3_bucket" "logs" {}\n')
+            scope_args = ["--scope", "change-aware", "--baseline-dir", str(self.baseline_dir)]
+            if baseline_ref is not None:
+                scope_args += ["--baseline-ref", baseline_ref]
+            run_env["FAKE_FCS_REPORTS"] = os.pathsep.join(
+                [str(fixture_report(baseline_report)), str(fixture_report(report or "clean.json"))]
+            )
+            run_env["FAKE_FCS_EXIT_CODES"] = f"{baseline_exit_code},{exit_code or 40}"
         if no_report:
             run_env["FAKE_FCS_NO_REPORT"] = "1"
         if env:
             run_env.update(env)
 
         argv = [
+            "run",
             "--path",
             str(self.scan_root),
             "--region",
@@ -111,6 +131,7 @@ class GateHarness:
             str(work_dir),
             "--fcs-binary",
             str(FAKE_FCS),
+            *scope_args,
             *args,
         ]
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -132,6 +153,11 @@ class GateHarness:
             if fake_record.exists()
             else [],
         )
+
+
+def fixture_report(report: str | Path) -> Path:
+    path = Path(report)
+    return path if path.is_absolute() else FIXTURE_REPORTS / path
 
 
 @pytest.fixture(autouse=True)

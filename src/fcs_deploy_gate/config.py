@@ -7,10 +7,12 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from fcs_deploy_gate.baseline import PIPELINES, BaselineCandidates
+
 SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "informational")
 DEFAULT_BLOCKING_THRESHOLD: frozenset[str] = frozenset({"critical", "high", "medium"})
 REGIONS: tuple[str, ...] = ("us-1", "us-2", "eu-1", "us-gov-1", "us-gov-2")
-SCOPES: tuple[str, ...] = ("whole-tree",)
+SCOPES: tuple[str, ...] = ("whole-tree", "change-aware")
 MODES: tuple[str, ...] = ("enforcing", "advisory")
 
 
@@ -34,6 +36,14 @@ class Config:
     work_dir: Path
     fcs_binary: Path
     block_on_unscanned_files: bool
+    baseline_dir: Path | None
+    baseline_ref: str | None
+    baseline_error: str | None
+    project_name: str | None
+
+    @property
+    def change_aware(self) -> bool:
+        return self.scope == "change-aware"
 
     @property
     def enforcing(self) -> bool:
@@ -52,6 +62,33 @@ class _Parser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="fcs-deploy-gate",
+        description="A pre-apply Gate that stops Terraform Deployments which would create IOMs.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+    _add_run_command(commands)
+    _add_resolve_baseline_command(commands)
+    return parser
+
+
+def _add_resolve_baseline_command(commands: argparse._SubParsersAction[_Parser]) -> None:
+    parser = commands.add_parser(
+        "resolve-baseline",
+        help="Turn a pipeline's variables into the Baseline ref, or an error line.",
+        description=(
+            "Prints 'ref=<ref>' or 'error=<message>' on one line and exits 0 either way; "
+            "the adapter passes the result to 'run' (--baseline-ref or --baseline-error)."
+        ),
+    )
+    parser.add_argument("--pipeline", required=True, choices=PIPELINES)
+    parser.add_argument("--explicit-ref", default="", help="Ref the Consumer named, if any.")
+    parser.add_argument("--merge-base", default="", help="Merge base with the target branch.")
+    parser.add_argument("--previous-commit", default="", help="Commit before the push.")
+
+
+def _add_run_command(commands: argparse._SubParsersAction[_Parser]) -> None:
+    parser = commands.add_parser(
+        "run",
+        help="Scan a Terraform directory and decide whether the Deployment may proceed.",
         description=(
             "Scan a Terraform directory with the CrowdStrike fcs CLI and decide whether "
             "the Deployment may proceed."
@@ -59,7 +96,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--path", required=True, help="Terraform directory to scan.")
     parser.add_argument("--region", required=True, choices=REGIONS, help="Falcon region.")
-    parser.add_argument("--scope", default="whole-tree", choices=SCOPES, help="Scope.")
+    parser.add_argument(
+        "--scope",
+        default="whole-tree",
+        choices=SCOPES,
+        help=(
+            "whole-tree considers every Finding; change-aware only those absent from the Baseline."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-dir",
+        default=None,
+        help="Change-aware only: directory holding the Consumer's source at the Baseline ref.",
+    )
+    parser.add_argument(
+        "--baseline-ref",
+        default=None,
+        help="Change-aware only: the Baseline ref, recorded in the Verdict (see resolve-baseline).",
+    )
+    parser.add_argument(
+        "--baseline-error",
+        default=None,
+        help="Change-aware only: the error line resolve-baseline printed; makes a blocked Verdict.",
+    )
+    parser.add_argument(
+        "--project-name",
+        default=None,
+        help="Project name for the console upload; defaults to the repository directory name.",
+    )
     parser.add_argument("--mode", default="enforcing", choices=MODES, help="Gate mode.")
     parser.add_argument(
         "--blocking-threshold",
@@ -89,7 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to an fcs binary to use instead of downloading the pinned release.",
     )
-    return parser
 
 
 def parse_blocking_threshold(value: str) -> frozenset[str]:
@@ -132,9 +195,19 @@ def _symlink_within(work_dir: Path) -> bool:
     return False
 
 
-def parse_args(argv: Sequence[str]) -> Config:
+def parse_args(argv: Sequence[str]) -> Config | BaselineCandidates:
     namespace = build_parser().parse_args(list(argv))
+    if namespace.command == "resolve-baseline":
+        return BaselineCandidates(
+            pipeline=namespace.pipeline,
+            explicit_ref=namespace.explicit_ref,
+            merge_base=namespace.merge_base,
+            previous_commit=namespace.previous_commit,
+        )
+    return _run_config(namespace)
 
+
+def _run_config(namespace: argparse.Namespace) -> Config:
     scan_path = Path(namespace.path)
     if not scan_path.is_dir():
         raise ConfigurationError(f"--path {namespace.path!r} is not a directory")
@@ -166,4 +239,8 @@ def parse_args(argv: Sequence[str]) -> Config:
         work_dir=work_dir,
         fcs_binary=fcs_binary,
         block_on_unscanned_files=namespace.block_on_unscanned_files,
+        baseline_dir=Path(namespace.baseline_dir) if namespace.baseline_dir else None,
+        baseline_ref=namespace.baseline_ref or None,
+        baseline_error=namespace.baseline_error or None,
+        project_name=namespace.project_name or None,
     )

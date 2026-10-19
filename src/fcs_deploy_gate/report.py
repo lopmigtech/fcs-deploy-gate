@@ -31,6 +31,12 @@ class Finding:
     description: str
 
     @property
+    def identity(self) -> tuple[str, str | None, str | None, str | None]:
+        """What makes two Findings the same across scans (ADR 0002): rule id, normalised
+        file, resource type and resource name. The line number is ignored."""
+        return (self.rule_id, self.file, self.resource_type, self.resource_name)
+
+    @property
     def resource_address(self) -> str | None:
         """``type.name`` when the Finding is on a resource, else None."""
         if self.resource_type and self.resource_name:
