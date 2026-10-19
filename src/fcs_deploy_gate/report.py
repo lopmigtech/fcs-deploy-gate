@@ -198,23 +198,49 @@ def unscanned_file_count(report: dict[str, Any]) -> int:
     return count if count is not None and count > 0 else 0
 
 
-def require_cloud_rules_evidence(report: dict[str, Any]) -> None:
-    """The CLI silently falls back to local rules on a bad token or missing region, and the
-    exit code and report then look normal. ``stats.rule_stats`` is the evidence that the
-    tenant's rules were in force (field name provisional until the first live run); its
-    absence, or a zero count, is a scan error."""
-    stats = report.get("stats")
-    rules = stats.get("rule_stats") if isinstance(stats, dict) else None
-    counts = [
-        _optional_int(rules.get(key)) if isinstance(rules, dict) else None
-        for key in ("rules_enabled", "total_rules")
-    ]
-    if not any(count is not None and count > 0 for count in counts):
-        raise ReportError(
-            "no evidence that the tenant's cloud rules were in force: stats.rule_stats is "
-            "missing or reports zero rules (a bad token or missing region makes the CLI fall "
-            "back to local rules silently)"
+CUSTOM_RULES_LINE = "Fetching custom rules from Falcon Cloud"
+
+
+@dataclass(frozen=True)
+class CloudRulesEvidence:
+    """What shows the tenant's cloud rules were in force. The CLI silently falls back to
+    local rules on a bad token or missing region, and the exit code and report then look
+    normal, so the Gate looks for the report's rule statistics (field names provisional
+    until the first live run) and for the line the CLI prints when it fetches the rules."""
+
+    rules_enabled: int | None
+    total_rules: int | None
+    custom_rules_fetched: bool
+
+    @classmethod
+    def gather(cls, report: dict[str, Any], cli_stdout: str) -> CloudRulesEvidence:
+        stats = report.get("stats")
+        rules = stats.get("rule_stats") if isinstance(stats, dict) else None
+        rules = rules if isinstance(rules, dict) else {}
+        return cls(
+            rules_enabled=_optional_int(rules.get("rules_enabled")),
+            total_rules=_optional_int(rules.get("total_rules")),
+            custom_rules_fetched=CUSTOM_RULES_LINE in cli_stdout,
         )
+
+    @property
+    def sufficient(self) -> bool:
+        """``rules_enabled`` decides when present; ``total_rules`` only stands in for it;
+        the fetched-rules line is evidence on its own."""
+        count = self.rules_enabled if self.rules_enabled is not None else self.total_rules
+        return self.custom_rules_fetched or (count is not None and count > 0)
+
+    def require(self) -> None:
+        if not self.sufficient:
+            raise ReportError(
+                "no evidence that the tenant's cloud rules were in force: stats.rule_stats is "
+                "missing or reports zero enabled rules and the CLI did not report fetching "
+                "custom rules (a bad token or missing region makes it fall back to local "
+                "rules silently)"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def findings_from_report(report: dict[str, Any], scan_root: Path) -> list[Finding]:

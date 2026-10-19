@@ -15,7 +15,7 @@ from fcs_deploy_gate.exclusions import (
     StaleExclusion,
     apply_exclusions,
 )
-from fcs_deploy_gate.report import Finding
+from fcs_deploy_gate.report import CloudRulesEvidence, Finding
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class Verdict:
     baseline_ref: str | None = None
     total_findings: int = 0
     new_findings: int = 0
+    cloud_rules_evidence: CloudRulesEvidence | None = None
 
     @property
     def blocked_by_unscanned_files(self) -> bool:
@@ -68,6 +69,7 @@ def decide(
     baseline_ref: str | None = None,
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
+    cloud_rules_evidence: CloudRulesEvidence | None = None,
 ) -> Verdict:
     """Whole-tree when ``baseline`` is None; otherwise Change-aware: each Baseline
     occurrence of an identity accounts for one occurrence in the change, and any surplus
@@ -94,6 +96,7 @@ def decide(
         baseline_ref=baseline_ref,
         total_findings=len(ordered),
         new_findings=len(considered),
+        cloud_rules_evidence=cloud_rules_evidence,
     )
 
 
@@ -116,5 +119,8 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "stale_exclusions": [s.to_dict() for s in verdict.stale_exclusions],
         "unscanned_files": verdict.unscanned_files,
         "block_on_unscanned_files": verdict.block_on_unscanned_files,
+        "cloud_rules_evidence": (
+            verdict.cloud_rules_evidence.to_dict() if verdict.cloud_rules_evidence else None
+        ),
         "error": verdict.error,
     }

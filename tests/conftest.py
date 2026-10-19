@@ -67,6 +67,30 @@ class GateHarness:
         """Where the harness checks out the Baseline, as an adapter would."""
         return self.tmp_path / "baseline"
 
+    def real(
+        self,
+        falcon: Transport,
+        *,
+        pin: CliPin | None,
+        clock: Clock | None = None,
+        env: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> GateRun:
+        """Call the Gate on its real path: no --fcs-binary, the fake Falcon API as the
+        transport, the CI credentials in the environment."""
+        credentials = {
+            "FALCON_CLIENT_ID": "client-id-from-ci",
+            "FALCON_CLIENT_SECRET": "s3cret-from-ci",
+        }
+        return self(
+            fake_binary=False,
+            transport=falcon,
+            clock=clock,
+            pin=pin,
+            env={**credentials, **(env or {})},
+            **kwargs,
+        )
+
     def write_exclusions(self, content: str) -> Path:
         path = self.repo_root / EXCLUSION_FILENAME
         path.write_text(content)
@@ -139,14 +163,15 @@ class GateHarness:
             *args,
         ]
         stdout, stderr = io.StringIO(), io.StringIO()
+        if clock is None:
+            clock = FakeClock(fixed_today=today) if today else FakeClock()
         code = run(
             argv,
             env=run_env,
             stdout=stdout,
             stderr=stderr,
-            today=today,
             transport=transport,
-            clock=clock or FakeClock(),
+            clock=clock,
             pin=pin,
         )
         verdict_file = work_dir / "verdict.json"

@@ -17,13 +17,42 @@ class TransportError(Exception):
 
 
 @dataclass(frozen=True)
+class ProxySettings:
+    """Which proxy applies, read from the environment the Gate was given (so a CI job's
+    HTTPS_PROXY reaches the transport even though the transport never reads os.environ)."""
+
+    proxies: dict[str, str] = field(default_factory=dict)
+    no_proxy: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> ProxySettings:
+        proxies: dict[str, str] = {}
+        for scheme in ("https", "http"):
+            value = env.get(f"{scheme.upper()}_PROXY") or env.get(f"{scheme}_proxy")
+            if value:
+                proxies[scheme] = value
+        return cls(proxies=proxies, no_proxy=env.get("NO_PROXY") or env.get("no_proxy") or None)
+
+    def bypasses(self, host: str) -> bool:
+        """Whether ``host`` is listed in NO_PROXY: ``*``, an exact host, or a domain suffix,
+        each optionally with a port."""
+        if not self.no_proxy:
+            return False
+        host = host.lower()
+        for entry in self.no_proxy.split(","):
+            entry = entry.strip().lower().lstrip(".").split(":")[0]
+            if entry == "*" or (entry and (host == entry or host.endswith("." + entry))):
+                return True
+        return False
+
+
+@dataclass(frozen=True)
 class HttpRequest:
     method: str
     url: str
     headers: dict[str, str] = field(default_factory=dict)
     body: bytes | None = None
-    proxies: dict[str, str] = field(default_factory=dict)
-    no_proxy: str | None = None
+    proxy: ProxySettings = field(default_factory=ProxySettings)
 
 
 @dataclass(frozen=True)
@@ -39,35 +68,10 @@ class HttpResponse:
 Transport = Callable[[HttpRequest], HttpResponse]
 
 
-@dataclass(frozen=True)
-class ProxySettings:
-    """Which proxy applies, read from the environment the Gate was given (so a CI job's
-    HTTPS_PROXY reaches the transport even though the transport never reads os.environ)."""
-
-    proxies: dict[str, str]
-    no_proxy: str | None
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> ProxySettings:
-        proxies: dict[str, str] = {}
-        for scheme in ("https", "http"):
-            value = env.get(f"{scheme.upper()}_PROXY") or env.get(f"{scheme}_proxy")
-            if value:
-                proxies[scheme] = value
-        return cls(proxies=proxies, no_proxy=env.get("NO_PROXY") or env.get("no_proxy") or None)
-
-
-def bypasses_proxy(host: str, no_proxy: str | None) -> bool:
-    """Whether ``host`` is listed in a NO_PROXY value: ``*``, an exact host, or a domain
-    suffix, each optionally with a port."""
-    if not no_proxy:
-        return False
-    host = host.lower()
-    for entry in no_proxy.split(","):
-        entry = entry.strip().lower().lstrip(".").split(":")[0]
-        if entry == "*" or (entry and (host == entry or host.endswith("." + entry))):
-            return True
-    return False
+def safe_url(url: str) -> str:
+    """The URL without its query or fragment, fit for a message: a pre-signed download URL
+    carries its authorisation in the query string."""
+    return urlsplit(url)._replace(query="", fragment="").geturl()
 
 
 class UrllibTransport:
@@ -75,7 +79,7 @@ class UrllibTransport:
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         host = urlsplit(request.url).hostname or ""
-        proxies = {} if bypasses_proxy(host, request.no_proxy) else request.proxies
+        proxies = {} if request.proxy.bypasses(host) else request.proxy.proxies
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
         prepared = urllib.request.Request(
             request.url, data=request.body, headers=request.headers, method=request.method
@@ -87,5 +91,9 @@ class UrllibTransport:
                 )
         except urllib.error.HTTPError as error:
             return HttpResponse(status=error.code, headers=dict(error.headers), body=error.read())
-        except (urllib.error.URLError, OSError) as error:
-            raise TransportError(f"{request.method} {request.url}: {error}") from error
+        except urllib.error.URLError as error:
+            raise TransportError(
+                f"{request.method} {safe_url(request.url)}: {error.reason}"
+            ) from error
+        except OSError as error:
+            raise TransportError(f"{request.method} {safe_url(request.url)}: {error}") from error

@@ -61,6 +61,11 @@ def main() -> int:
                 json.dumps({"argv": argv, "env": dict(os.environ), "cwd": os.getcwd()}) + "\n"
             )
 
+    if os.environ.get("FAKE_FCS_SAY_FETCHING_RULES") == "1":
+        print("Fetching custom rules from Falcon Cloud")
+    if os.environ.get("FAKE_FCS_ECHO_ARGV") == "1":
+        print("Error: invalid arguments: " + " ".join(argv), file=sys.stderr)
+
     exit_codes = os.environ.get(prefix + "EXIT_CODES")
     if exit_codes:
         exit_code = int(nth(exit_codes, ",", index))

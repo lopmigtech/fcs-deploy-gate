@@ -10,11 +10,11 @@ import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from fcs_deploy_gate.falcon import FalconApi
+from fcs_deploy_gate.falcon import DownloadResource, FalconApi
 
 BINARY_NAME = "fcs"
+ZIP_MAGIC = b"PK\x03\x04"
 
 
 @dataclass(frozen=True)
@@ -39,50 +39,46 @@ class DownloadError(Exception):
     """The pinned CLI could not be obtained and verified."""
 
 
-def select_resource(resources: list[dict[str, Any]], version: str) -> dict[str, Any]:
+def published_build(api: FalconApi, token: str, version: str) -> DownloadResource:
+    """The download API's description of exactly ``version``; anything else is an error."""
+    resources = api.download_info(token, version)
     for resource in resources:
-        if resource.get("file_version") == version:
+        if resource.version == version:
+            if not resource.sha256:
+                raise DownloadError(f"the download API reported no file hash for fcs {version}")
             return resource
-    listed = ", ".join(sorted({str(r.get("file_version")) for r in resources})) or "nothing"
+    listed = ", ".join(sorted({r.version for r in resources})) or "nothing"
     raise DownloadError(
         f"the download API lists no fcs {version} for linux/amd64 (it lists: {listed})"
     )
 
 
-def reported_hash(resource: dict[str, Any]) -> str:
-    info = resource.get("download_info")
-    value = (info.get("file_hash") if isinstance(info, dict) else None) or resource.get("file_hash")
-    if not isinstance(value, str) or not value:
-        raise DownloadError("the download API reported no file hash for the pinned fcs")
-    return value.lower()
-
-
 def install_cli(api: FalconApi, token: str, pin: CliPin, into: Path) -> Path:
     """Download, verify and extract the pinned CLI into ``into``; the path of the binary."""
-    resource = select_resource(api.download_info(token, pin.version), pin.version)
-    reported = reported_hash(resource)
-    if reported != pin.sha256.lower():
+    build = published_build(api, token, pin.version)
+    pinned = pin.sha256.lower()
+    if build.sha256 != pinned:
         raise DownloadError(
-            f"the download API reports SHA-256 {reported} for fcs {pin.version} but the pin "
-            f"is {pin.sha256.lower()}; refusing to download"
+            f"the download API reports SHA-256 {build.sha256} for fcs {pin.version} but the "
+            f"pin is {pinned}; refusing to download"
         )
-    info = resource.get("download_info")
-    url = info.get("download_url") if isinstance(info, dict) else None
-    if not isinstance(url, str) or not url:
-        raise DownloadError("the download API reported no download URL for the pinned fcs")
-    data = api.fetch(url)
+    if not build.download_url:
+        raise DownloadError(f"the download API reported no download URL for fcs {pin.version}")
+    data = api.fetch(build.download_url)
     actual = hashlib.sha256(data).hexdigest()
-    if actual != pin.sha256.lower():
-        raise DownloadError(
-            f"the downloaded archive has SHA-256 {actual}, not the pinned {pin.sha256.lower()}"
-        )
-    return extract_binary(data, str(resource.get("file_name") or ""), into)
+    if actual != pinned:
+        raise DownloadError(f"the downloaded archive has SHA-256 {actual}, not the pinned {pinned}")
+    return extract_binary(data, build.file_name, into)
+
+
+def _is_the_binary(name: str) -> bool:
+    return name in (BINARY_NAME, f"./{BINARY_NAME}")
 
 
 def _member_from_tar(data: bytes) -> bytes | None:
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
         for member in archive.getmembers():
-            if member.isfile() and os.path.basename(member.name) == BINARY_NAME:
+            if member.isfile() and _is_the_binary(member.name):
                 extracted = archive.extractfile(member)
                 return extracted.read() if extracted is not None else None
     return None
@@ -91,7 +87,7 @@ def _member_from_tar(data: bytes) -> bytes | None:
 def _member_from_zip(data: bytes) -> bytes | None:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         for member in archive.infolist():
-            if not member.is_dir() and os.path.basename(member.filename) == BINARY_NAME:
+            if not member.is_dir() and _is_the_binary(member.filename):
                 return archive.read(member)
     return None
 
@@ -99,7 +95,7 @@ def _member_from_zip(data: bytes) -> bytes | None:
 def extract_binary(data: bytes, file_name: str, into: Path) -> Path:
     """Write only the archive member named ``fcs`` to ``into``, executable. A corrupt
     archive or one without that member is an error, and nothing is written."""
-    is_zip = file_name.endswith(".zip") or data[:4] == b"PK\\x03\\x04"
+    is_zip = file_name.endswith(".zip") or data[: len(ZIP_MAGIC)] == ZIP_MAGIC
     try:
         content = _member_from_zip(data) if is_zip else _member_from_tar(data)
     except (tarfile.TarError, zipfile.BadZipFile, EOFError, OSError) as exc:

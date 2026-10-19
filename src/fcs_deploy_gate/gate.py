@@ -21,14 +21,7 @@ from fcs_deploy_gate.config import (
     ResolveBaselineCommand,
     parse_args,
 )
-from fcs_deploy_gate.download import (
-    PIN,
-    CliPin,
-    DownloadError,
-    install_cli,
-    reported_hash,
-    select_resource,
-)
+from fcs_deploy_gate.download import PIN, CliPin, DownloadError, install_cli, published_build
 from fcs_deploy_gate.exclusions import (
     EXCLUSION_FILENAME,
     Exclusion,
@@ -44,11 +37,11 @@ from fcs_deploy_gate.falcon import (
 )
 from fcs_deploy_gate.http import ProxySettings, Transport, UrllibTransport
 from fcs_deploy_gate.report import (
+    CloudRulesEvidence,
     Finding,
     ReportError,
     findings_from_report,
     load_report,
-    require_cloud_rules_evidence,
     unscanned_file_count,
 )
 from fcs_deploy_gate.retry import RetriesExhausted, with_retries
@@ -66,17 +59,16 @@ def run(
     env: Mapping[str, str],
     stdout: TextIO,
     stderr: TextIO,
-    today: date | None = None,
     clock: Clock | None = None,
     transport: Transport | None = None,
     pin: CliPin | None = None,
 ) -> int:
     """The Gate, behind its three injected boundaries: the HTTP ``transport``, the
-    ``clock`` (waits and today's date; ``today`` alone fixes the date), and the process
-    runner, which is whatever ``--fcs-binary`` or the downloaded CLI is. ``pin`` exists so
-    tests can pin the archive they serve; the real pin is a constant in the code."""
+    ``clock`` (today's date and the retry waits), and the process runner, which is
+    whatever ``--fcs-binary`` or the downloaded CLI is. ``pin`` is a fourth, narrower
+    seam: tests pin the archive they serve, while the real pin is a constant in the code."""
     clock = clock or SystemClock()
-    today = today or clock.today()
+    today = clock.today()
     transport = transport or UrllibTransport()
     pin = pin or PIN
     try:
@@ -158,8 +150,8 @@ def _credentials_for(config: Config, env: Mapping[str, str]) -> Credentials | No
 
 
 @dataclass(frozen=True)
-class _Tools:
-    """What a scan needs: the binary to run and the token to hand it, if any."""
+class _PreparedCli:
+    """The binary a scan runs and the token it is handed, if any."""
 
     binary: Path
     token: str | None
@@ -172,16 +164,16 @@ def _prepare_cli(
     pin: CliPin,
     clock: Clock,
     cli_dir: Path,
-) -> _Tools | Verdict:
+) -> _PreparedCli | Verdict:
     """The test seam binary as given, or the pinned CLI downloaded and verified with a
     fresh token, retried; exhausting the retries is a blocked Verdict (ADR 0001)."""
     if config.fcs_binary is not None:
-        return _Tools(binary=config.fcs_binary, token=None)
+        return _PreparedCli(binary=config.fcs_binary, token=None)
     assert credentials is not None and pin.filled  # run() checked both before any work
 
-    def download() -> _Tools:
+    def download() -> _PreparedCli:
         token = api.token(credentials)
-        return _Tools(binary=install_cli(api, token, pin, cli_dir), token=token)
+        return _PreparedCli(binary=install_cli(api, token, pin, cli_dir), token=token)
 
     try:
         return with_retries("the fcs CLI download", download, clock, (FalconError, DownloadError))
@@ -207,16 +199,13 @@ def _pin_command(
     api = FalconApi(transport=transport, region=command.region, proxy=ProxySettings.from_env(env))
     version = command.version or pin.version
     try:
-        resource = select_resource(api.download_info(api.token(credentials), version), version)
-        digest = reported_hash(resource)
+        build = published_build(api, api.token(credentials), version)
     except (FalconError, DownloadError) as exc:
         stderr.write(f"fcs-deploy-gate: error: {exc}\n")
         return 1
     stdout.write(
-        f"version={resource.get('file_version')}\n"
-        f"sha256={digest}\n"
-        f"file_name={resource.get('file_name')}\n"
-        f"size={resource.get('size')}\n"
+        f"version={build.version}\nsha256={build.sha256}\n"
+        f"file_name={build.file_name}\nsize={build.size}\n"
     )
     return 0
 
@@ -227,7 +216,7 @@ def _scan_and_judge(
     exclusions: list[Exclusion],
     today: date,
     project_name: str,
-    tools: _Tools,
+    tools: _PreparedCli,
     clock: Clock,
 ) -> Verdict:
     """Fail closed (ADR 0001): a Baseline that cannot be used, a scan that did not
@@ -246,17 +235,17 @@ def _scan_and_judge(
             )
         baseline_dir = config.baseline_dir
         try:
-            _, baseline = with_retries(
+            baseline = with_retries(
                 "the Baseline scan",
                 lambda: _scan(config, env, tools, baseline_dir, BASELINE_REPORT_FILENAME),
                 clock,
                 (ReportError,),
-            )
+            ).findings
         except RetriesExhausted as exc:
             return _blocked(config, str(exc))
 
     try:
-        report, findings = with_retries(
+        scanned = with_retries(
             "the scan",
             lambda: _scan(config, env, tools, config.scan_path, upload_as=project_name),
             clock,
@@ -265,30 +254,39 @@ def _scan_and_judge(
     except RetriesExhausted as exc:
         return _blocked(config, str(exc))
     return decide(
-        findings,
+        scanned.findings,
         config.blocking_threshold,
         exclusions=exclusions,
         today=today,
         baseline=baseline,
         baseline_ref=_baseline_ref(config),
-        unscanned_files=unscanned_file_count(report),
+        unscanned_files=unscanned_file_count(scanned.report),
         block_on_unscanned_files=config.block_on_unscanned_files,
+        cloud_rules_evidence=scanned.evidence,
     )
+
+
+@dataclass(frozen=True)
+class _Scanned:
+    report: dict[str, Any]
+    findings: list[Finding]
+    evidence: CloudRulesEvidence
 
 
 def _scan(
     config: Config,
     env: Mapping[str, str],
-    tools: _Tools,
+    tools: _PreparedCli,
     directory: Path,
     report_filename: str = REPORT_FILENAME,
     *,
     upload_as: str | None = None,
-) -> tuple[dict[str, Any], list[Finding]]:
-    """The report and Findings of one completed, trustworthy scan of ``directory``;
-    uploaded to the console under ``upload_as`` when given (the change), never otherwise
-    (the Baseline). A scan that did not complete, a report without cloud-rules evidence,
-    or one the Gate cannot interpret is a ReportError, which the caller retries."""
+) -> _Scanned:
+    """One completed, trustworthy scan of ``directory``: its report, Findings and
+    cloud-rules evidence; uploaded to the console under ``upload_as`` when given (the
+    change), never otherwise (the Baseline). A scan that did not complete, a report without
+    cloud-rules evidence, or one the Gate cannot interpret is a ReportError, which the
+    caller retries."""
     attempt = scan_iac(
         fcs_binary=tools.binary,
         scan_path=directory,
@@ -303,8 +301,9 @@ def _scan(
     if not attempt.completed:
         raise ReportError(attempt.failure_message())
     report = load_report(attempt.report_path)
-    require_cloud_rules_evidence(report)
-    return report, findings_from_report(report, directory)
+    evidence = CloudRulesEvidence.gather(report, attempt.stdout)
+    evidence.require()
+    return _Scanned(report, findings_from_report(report, directory), evidence)
 
 
 def _blocked(config: Config, message: str) -> Verdict:

@@ -25,13 +25,7 @@ def real(
     clock: FakeClock | None = None,
     env: dict[str, str] | None = None,
 ) -> GateRun:
-    return gate(
-        fake_binary=False,
-        transport=falcon,
-        clock=clock or FakeClock(),
-        pin=pin_for(falcon),
-        env={**CREDENTIALS, **(env or {})},
-    )
+    return gate.real(falcon, pin=pin_for(falcon), clock=clock, env=env)
 
 
 # ---- token ----
@@ -113,7 +107,7 @@ def test_downloaded_bytes_whose_hash_differs_from_the_pin_are_rejected(
     pin = pin_for(falcon)
     falcon.archive = tar_gz_archive(content=b"#!/bin/sh\nexit 0\n")  # swapped after the pin
 
-    result = gate(fake_binary=False, transport=falcon, clock=FakeClock(), pin=pin, env=CREDENTIALS)
+    result = gate.real(falcon, pin=pin)
 
     assert result.exit_code == 1
     assert "SHA-256" in result.verdict["error"]
@@ -317,3 +311,128 @@ def test_pin_reports_api_errors(gate: GateHarness) -> None:
 
     assert code == 1
     assert "HTTP 401" in err and "invalid client" in err
+
+
+# ---- review findings ----
+
+
+def test_a_non_object_json_body_is_an_error_not_a_crash(gate: GateHarness) -> None:
+    from fcs_deploy_gate.http import HttpResponse
+
+    array_body = HttpResponse(status=200, headers={}, body=b"[]")
+    falcon = FakeFalcon(token_failures=[array_body] * 3)
+
+    result = real(gate, falcon)
+
+    assert result.exit_code == 1
+    assert result.verdict["verdict"] == "blocked"
+    assert "token" in result.verdict["error"].lower()
+    assert result.summary_text is not None
+
+
+def test_a_zip_archive_is_recognised_without_its_suffix(gate: GateHarness) -> None:
+    falcon = FakeFalcon(archive=zip_archive(), file_name="fcs-linux-amd64")
+
+    result = real(gate, falcon)
+
+    assert result.verdict["error"] is None
+    assert len(result.invocations) == 1
+
+
+def test_a_nested_member_is_not_the_fcs_binary(gate: GateHarness) -> None:
+    falcon = FakeFalcon(archive=tar_gz_archive(member="bin/fcs"))
+
+    result = real(gate, falcon)
+
+    assert result.exit_code == 1
+    assert "no member named fcs" in result.verdict["error"]
+
+
+def test_zero_enabled_rules_is_not_evidence_even_with_a_total(
+    gate: GateHarness, tmp_path: Path
+) -> None:
+    import json
+
+    from tests.conftest import FIXTURE_REPORTS
+
+    report = json.loads((FIXTURE_REPORTS / "findings.json").read_text())
+    report["stats"]["rule_stats"] = {"total_rules": 1850, "rules_enabled": 0}
+    path = tmp_path / "zero-enabled.json"
+    path.write_text(json.dumps(report))
+
+    result = gate(report=path)
+
+    assert result.exit_code == 1
+    assert "cloud rules" in result.verdict["error"]
+
+
+def test_the_fetching_custom_rules_line_counts_as_evidence_and_is_recorded(
+    gate: GateHarness, tmp_path: Path
+) -> None:
+    import json
+
+    from tests.conftest import FIXTURE_REPORTS
+
+    report = json.loads((FIXTURE_REPORTS / "findings.json").read_text())
+    del report["stats"]["rule_stats"]
+    path = tmp_path / "no-rule-stats.json"
+    path.write_text(json.dumps(report))
+
+    without_line = gate(report=path)
+    with_line = gate(report=path, env={"FAKE_FCS_SAY_FETCHING_RULES": "1"})
+
+    assert "cloud rules" in without_line.verdict["error"]
+    assert with_line.verdict["error"] is None
+    assert with_line.verdict["cloud_rules_evidence"] == {
+        "rules_enabled": None,
+        "total_rules": None,
+        "custom_rules_fetched": True,
+    }
+
+
+def test_the_verdict_records_the_rule_statistics_seen(gate: GateHarness) -> None:
+    result = gate()
+
+    assert result.verdict["cloud_rules_evidence"] == {
+        "rules_enabled": 1850,
+        "total_rules": 1850,
+        "custom_rules_fetched": False,
+    }
+
+
+def test_a_transport_failure_never_leaks_the_signed_url(gate: GateHarness) -> None:
+    falcon = FakeFalcon(archive_failures=[connection_refused()] * 3)
+
+    result = real(gate, falcon)
+
+    assert result.exit_code == 1
+    assert "X-Amz-Signature" not in result.verdict["error"]
+    assert "X-Amz-Signature" not in result.summary
+    assert "fcs-downloads.s3.amazonaws.com" in result.verdict["error"]
+
+
+def test_the_token_is_redacted_from_cli_output_in_messages(gate: GateHarness) -> None:
+    from tests.fake_falcon import TOKEN
+
+    falcon = FakeFalcon()
+
+    result = real(gate, falcon, env={"FAKE_FCS_EXIT_CODES": "201", "FAKE_FCS_ECHO_ARGV": "1"})
+
+    assert result.exit_code == 1
+    assert "CLI stderr" in result.verdict["error"]
+    assert TOKEN not in result.verdict["error"]
+    assert TOKEN not in result.summary
+    assert "<redacted>" in result.verdict["error"]
+
+
+def test_the_baseline_scan_also_receives_the_token_and_no_upload(gate: GateHarness) -> None:
+    from tests.fake_falcon import TOKEN
+
+    falcon = FakeFalcon()
+
+    result = gate.real(falcon, pin=pin_for(falcon), baseline_report="baseline.json")
+
+    baseline, change = result.invocations
+    assert baseline["argv"][baseline["argv"].index("--falcon-token") + 1] == TOKEN
+    assert "--upload-results" not in baseline["argv"]
+    assert change["argv"][change["argv"].index("--falcon-token") + 1] == TOKEN

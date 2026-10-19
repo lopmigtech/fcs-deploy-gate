@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from fcs_deploy_gate.download import CliPin
 from fcs_deploy_gate.http import HttpRequest, HttpResponse, TransportError
 from tests.conftest import FAKE_FCS
 
@@ -26,14 +27,19 @@ DOWNLOAD_URL = (
 )
 
 
-def tar_gz_archive(member: str = "fcs", content: bytes | None = None) -> bytes:
+def tar_gz_archive(
+    member: str = "fcs",
+    content: bytes | None = None,
+    extra_members: dict[str, bytes] | None = None,
+) -> bytes:
     content = FAKE_FCS.read_bytes() if content is None else content
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        info = tarfile.TarInfo(name=member)
-        info.size = len(content)
-        info.mode = 0o755
-        archive.addfile(info, io.BytesIO(content))
+        for name, data in {**(extra_members or {}), member: content}.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            info.mode = 0o755
+            archive.addfile(info, io.BytesIO(data))
     return buffer.getvalue()
 
 
@@ -150,9 +156,7 @@ def connection_refused() -> TransportError:
     return TransportError("connection refused")
 
 
-def pin_for(falcon: FakeFalcon) -> Any:
-    from fcs_deploy_gate.download import CliPin
-
+def pin_for(falcon: FakeFalcon) -> CliPin:
     return CliPin(version=falcon.version, sha256=sha256(falcon.archive))
 
 

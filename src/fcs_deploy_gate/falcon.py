@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
-from fcs_deploy_gate.http import HttpRequest, HttpResponse, ProxySettings, Transport, TransportError
+from fcs_deploy_gate.http import (
+    HttpRequest,
+    HttpResponse,
+    ProxySettings,
+    Transport,
+    TransportError,
+    safe_url,
+)
 
 API_HOSTS: dict[str, str] = {
     "us-1": "api.crowdstrike.com",
@@ -42,9 +49,34 @@ class Credentials:
         return None
 
 
+@dataclass(frozen=True)
+class DownloadResource:
+    """One published build of the CLI, as the download API describes it."""
+
+    version: str
+    sha256: str
+    download_url: str
+    file_name: str
+    size: int | None
+
+    @classmethod
+    def parse(cls, raw: dict[str, Any]) -> DownloadResource:
+        info = raw.get("download_info")
+        info = info if isinstance(info, dict) else {}
+        digest = info.get("file_hash") or raw.get("file_hash")
+        size = raw.get("size")
+        return cls(
+            version=str(raw.get("file_version") or ""),
+            sha256=str(digest).lower() if isinstance(digest, str) else "",
+            download_url=str(info.get("download_url") or ""),
+            file_name=str(raw.get("file_name") or ""),
+            size=size if isinstance(size, int) and not isinstance(size, bool) else None,
+        )
+
+
 def api_error_text(response: HttpResponse) -> str:
-    try:
-        payload = json.loads(response.body.decode("utf-8"))
+    payload = _json_payload(response)
+    if isinstance(payload, dict):
         messages = [
             str(error.get("message"))
             for error in payload.get("errors", [])
@@ -52,9 +84,14 @@ def api_error_text(response: HttpResponse) -> str:
         ]
         if messages:
             return "; ".join(messages)
-    except (ValueError, AttributeError):
-        pass
     return response.text()
+
+
+def _json_payload(response: HttpResponse) -> Any:
+    try:
+        return json.loads(response.body.decode("utf-8"))
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -70,46 +107,45 @@ class FalconApi:
     def _send(
         self, method: str, url: str, headers: dict[str, str], body: bytes | None = None
     ) -> HttpResponse:
-        request = HttpRequest(
-            method=method,
-            url=url,
-            headers=headers,
-            body=body,
-            proxies=self.proxy.proxies,
-            no_proxy=self.proxy.no_proxy,
-        )
+        request = HttpRequest(method=method, url=url, headers=headers, body=body, proxy=self.proxy)
         try:
             return self.transport(request)
         except TransportError as exc:
-            raise FalconError(f"{method} {url} failed: {exc}") from exc
+            raise FalconError(f"{method} {safe_url(url)} failed: {exc}") from exc
+
+    def _json_object(
+        self, response: HttpResponse, what: str, expected: tuple[int, ...]
+    ) -> dict[str, Any]:
+        """The JSON object a successful call returns; anything else is a FalconError that
+        names the call, the status and the API's error text."""
+        if response.status not in expected:
+            raise FalconError(
+                f"{what} to {self.host} failed with HTTP {response.status}: "
+                f"{api_error_text(response)}"
+            )
+        payload = _json_payload(response)
+        if not isinstance(payload, dict):
+            raise FalconError(f"{what} to {self.host} returned no JSON object")
+        return payload
 
     def token(self, credentials: Credentials) -> str:
         """A short-lived bearer token (client-credentials grant, 30-minute lifetime)."""
-        url = f"https://{self.host}/oauth2/token"
         response = self._send(
             "POST",
-            url,
+            f"https://{self.host}/oauth2/token",
             {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
             urlencode(
                 {"client_id": credentials.client_id, "client_secret": credentials.client_secret}
             ).encode(),
         )
-        if response.status not in (200, 201):
-            raise FalconError(
-                f"token request to {self.host} failed with HTTP {response.status}: "
-                f"{api_error_text(response)}"
-            )
-        try:
-            token = json.loads(response.body.decode("utf-8")).get("access_token")
-        except ValueError:
-            token = None
+        token = self._json_object(response, "token request", (200, 201)).get("access_token")
         if not isinstance(token, str) or not token:
             raise FalconError(f"token request to {self.host} returned no access_token")
         return token
 
-    def download_info(self, token: str, version: str | None) -> list[dict[str, Any]]:
-        """The download resources for the fcs CLI on linux/amd64, newest version first,
-        narrowed to ``version`` when given."""
+    def download_info(self, token: str, version: str | None) -> list[DownloadResource]:
+        """The published CLI builds for linux/amd64, newest version first, narrowed to
+        ``version`` when given."""
         filter_ = "category:'fcs'+os:'linux'+arch:'amd64'"
         if version:
             filter_ += f"+file_version:'{version}'"
@@ -119,23 +155,17 @@ class FalconApi:
             f"https://{self.host}{DOWNLOAD_INFO_PATH}?{query}",
             {"Authorization": f"Bearer {token}", "Accept": "application/json"},
         )
-        if response.status != 200:
-            raise FalconError(
-                f"download-info query to {self.host} failed with HTTP {response.status}: "
-                f"{api_error_text(response)}"
-            )
-        try:
-            resources = json.loads(response.body.decode("utf-8")).get("resources")
-        except ValueError:
-            resources = None
+        resources = self._json_object(response, "download-info query", (200,)).get("resources")
         if not isinstance(resources, list):
             raise FalconError(f"download-info query to {self.host} returned no resources list")
-        return [resource for resource in resources if isinstance(resource, dict)]
+        return [DownloadResource.parse(r) for r in resources if isinstance(r, dict)]
 
     def fetch(self, url: str) -> bytes:
         """The bytes behind a pre-signed download URL. No bearer token: the URL carries its
         own authorisation and the token must not reach a third-party host."""
         response = self._send("GET", url, {})
         if response.status != 200:
-            raise FalconError(f"archive download failed with HTTP {response.status}")
+            raise FalconError(
+                f"archive download from {safe_url(url)} failed with HTTP {response.status}"
+            )
         return response.body

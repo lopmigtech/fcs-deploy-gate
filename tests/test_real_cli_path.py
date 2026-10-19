@@ -6,7 +6,7 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlsplit
 
 from tests.conftest import FakeClock, GateHarness
-from tests.fake_falcon import CREDENTIALS, TOKEN, FakeFalcon, pin_for
+from tests.fake_falcon import TOKEN, FakeFalcon, pin_for
 
 
 def test_missing_credentials_exit_2_before_any_network_call(gate: GateHarness) -> None:
@@ -23,7 +23,7 @@ def test_missing_credentials_exit_2_before_any_network_call(gate: GateHarness) -
 def test_an_empty_checksum_pin_refuses_to_run_before_any_network_call(gate: GateHarness) -> None:
     falcon = FakeFalcon()
 
-    result = gate(fake_binary=False, transport=falcon, env=CREDENTIALS)  # the code's pin: empty
+    result = gate.real(falcon, pin=None)  # the code's own pin, which is empty
 
     assert result.exit_code == 2
     assert "pin" in result.stderr.lower()
@@ -34,9 +34,7 @@ def test_the_real_path_downloads_verifies_extracts_and_scans(gate: GateHarness) 
     falcon = FakeFalcon()
     clock = FakeClock()
 
-    result = gate(
-        fake_binary=False, transport=falcon, clock=clock, pin=pin_for(falcon), env=CREDENTIALS
-    )
+    result = gate.real(falcon, pin=pin_for(falcon), clock=clock)
 
     assert result.exit_code == 1, result.stderr
     assert len(result.verdict["blocking_findings"]) == 6
@@ -80,16 +78,11 @@ def test_the_real_path_downloads_verifies_extracts_and_scans(gate: GateHarness) 
 def test_proxy_variables_reach_the_transport(gate: GateHarness) -> None:
     falcon = FakeFalcon()
 
-    gate(
-        fake_binary=False,
-        transport=falcon,
+    gate.real(
+        falcon,
         pin=pin_for(falcon),
-        env={
-            **CREDENTIALS,
-            "HTTPS_PROXY": "http://proxy.example.gov:3128",
-            "NO_PROXY": "localhost",
-        },
+        env={"HTTPS_PROXY": "http://proxy.example.gov:3128", "NO_PROXY": "localhost"},
     )
 
-    assert falcon.requests[0].proxies == {"https": "http://proxy.example.gov:3128"}
-    assert falcon.requests[0].no_proxy == "localhost"
+    assert falcon.requests[0].proxy.proxies == {"https": "http://proxy.example.gov:3128"}
+    assert falcon.requests[0].proxy.no_proxy == "localhost"

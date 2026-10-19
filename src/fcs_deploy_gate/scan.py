@@ -28,7 +28,9 @@ CREDENTIAL_ENV_VARS: tuple[str, ...] = (
 class ScanAttempt:
     exit_code: int
     report_path: Path
+    stdout: str
     stderr: str
+    secrets: tuple[str, ...] = ()
 
     @property
     def completed(self) -> bool:
@@ -44,7 +46,15 @@ class ScanAttempt:
         tail = self.stderr.strip().splitlines()[-3:]
         if tail:
             message += ". CLI stderr: " + " | ".join(line.strip() for line in tail)
-        return message
+        return self.redacted(message)
+
+    def redacted(self, text: str) -> str:
+        """``text`` with every secret the CLI was handed (its token) replaced, so a CLI that
+        echoes its arguments cannot put a live token into the Verdict or the job log."""
+        for secret in self.secrets:
+            if secret:
+                text = text.replace(secret, "<redacted>")
+        return text
 
 
 def cli_environment(env: Mapping[str, str]) -> dict[str, str]:
@@ -104,5 +114,9 @@ def scan_iac(
         check=False,
     )
     return ScanAttempt(
-        exit_code=completed.returncode, report_path=report_path, stderr=completed.stderr
+        exit_code=completed.returncode,
+        report_path=report_path,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        secrets=(token,) if token else (),
     )
