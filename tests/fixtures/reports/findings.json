@@ -1,0 +1,142 @@
+{
+  "fcs_version": "4.2.3",
+  "scan_type": "iac",
+  "scan_uuid": "6b1f0c2e-5d3a-4e8b-9f17-2a4c6e8d0b13",
+  "path": ".",
+  "project_name": "fixture-consumer",
+  "flags": {
+    "fail-on": ["critical=1", "high=1", "medium=1", "informational=1"],
+    "max-file-size": 100,
+    "output-path": "/work/fcs-report.json",
+    "path": ["."],
+    "policy-rule": "cloud",
+    "report-formats": ["json"],
+    "timeout": 300
+  },
+  "stats": {
+    "files_stats": {"total": 4, "failed_to_scan": 0, "skipped": 0},
+    "rule_stats": {"total_rules": 1850, "rules_enabled": 1850, "rules_failed_to_execute": 0}
+  },
+  "detection_summary": {"total": 5, "critical": 1, "high": 2, "medium": 1, "informational": 1},
+  "rule_detections": [
+    {
+      "rule_name": "S3 Bucket Publicly Accessible",
+      "rule_uuid": "0d0b5a6e-7f9c-4a1e-9b3f-2c6d8e1f4a70",
+      "rule_category": "Access Control",
+      "description": "The S3 bucket grants public read access through its ACL.",
+      "severity": "Critical",
+      "platform": "Terraform",
+      "cloud_provider": "AWS",
+      "service": "S3",
+      "rule_type": "default",
+      "detections": [
+        {
+          "file": "main.tf",
+          "line": 12,
+          "resource_type": "aws_s3_bucket",
+          "resource_name": "public_assets",
+          "issue_type": "IncorrectValue",
+          "reason": "acl is set to 'public-read'",
+          "recommendation": "Set acl to 'private' and attach an aws_s3_bucket_public_access_block."
+        }
+      ]
+    },
+    {
+      "rule_name": "S3 Bucket Without Server-Side Encryption",
+      "rule_uuid": "3f2a9c51-8b4d-4c7e-a1f6-5e9d0b2c7a84",
+      "rule_category": "Encryption",
+      "description": "The S3 bucket has no server-side encryption configuration.",
+      "severity": "High",
+      "platform": "Terraform",
+      "cloud_provider": "AWS",
+      "service": "S3",
+      "rule_type": "default",
+      "detections": [
+        {
+          "file": "main.tf",
+          "line": 12,
+          "resource_type": "aws_s3_bucket",
+          "resource_name": "public_assets",
+          "issue_type": "MissingAttribute",
+          "reason": "server_side_encryption_configuration is not defined",
+          "recommendation": "Add an aws_s3_bucket_server_side_encryption_configuration resource."
+        },
+        {
+          "file": "logging.tf",
+          "line": 4,
+          "resource_type": "aws_s3_bucket",
+          "resource_name": "logs",
+          "issue_type": "MissingAttribute",
+          "reason": "server_side_encryption_configuration is not defined",
+          "recommendation": "Add an aws_s3_bucket_server_side_encryption_configuration resource."
+        }
+      ]
+    },
+    {
+      "rule_name": "S3 Bucket Access Logging Disabled",
+      "rule_uuid": "9c7e2b14-6a3f-4d58-b2e9-1f0a4c8d6e35",
+      "rule_category": "Observability",
+      "description": "The S3 bucket does not have access logging enabled.",
+      "severity": "Medium",
+      "platform": "Terraform",
+      "cloud_provider": "AWS",
+      "service": "S3",
+      "rule_type": "default",
+      "detections": [
+        {
+          "file": "logging.tf",
+          "line": 4,
+          "resource_type": "aws_s3_bucket",
+          "resource_name": "logs",
+          "issue_type": "MissingAttribute",
+          "reason": "logging block is not defined",
+          "recommendation": "Add an aws_s3_bucket_logging resource targeting a separate log bucket."
+        }
+      ]
+    },
+    {
+      "rule_name": "Resource Missing Required Tags",
+      "rule_uuid": "b4d81e6f-2c9a-4f03-8e57-7a1b3c5d9f26",
+      "rule_category": "Best Practices",
+      "description": "The resource does not declare the tags the organisation requires.",
+      "severity": "Low",
+      "platform": "Terraform",
+      "cloud_provider": "AWS",
+      "service": "S3",
+      "rule_type": "default",
+      "detections": [
+        {
+          "file": "main.tf",
+          "line": 12,
+          "resource_type": "aws_s3_bucket",
+          "resource_name": "public_assets",
+          "issue_type": "MissingAttribute",
+          "reason": "tags.Owner and tags.CostCenter are not set",
+          "recommendation": "Add the required tags to the resource."
+        }
+      ]
+    }
+  ],
+  "secrets_analysis": {
+    "secrets": [
+      {
+        "type": "AWS Access Key ID",
+        "file_path": "variables.tf",
+        "line_number": 7,
+        "confidence": "high",
+        "pattern_matched": "AKIA[0-9A-Z]{16}",
+        "entropy_score": 3.9,
+        "remediation": "Remove the credential from source, rotate it, and read it from a secret store."
+      }
+    ]
+  },
+  "policy_violations": [
+    {
+      "policy_id": "pv-s3-public-access-block",
+      "policy_name": "Require S3 public access block",
+      "policy_type": "custom",
+      "description": "Every S3 bucket must be paired with an aws_s3_bucket_public_access_block.",
+      "severity": "High"
+    }
+  ]
+}

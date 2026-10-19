@@ -1,0 +1,24 @@
+{
+  "fcs_version": "4.2.3",
+  "scan_type": "iac",
+  "scan_uuid": "a2c4e6f8-1b3d-4f5a-97c9-8d0e2f4a6b1c",
+  "path": ".",
+  "project_name": "fixture-consumer",
+  "flags": {
+    "fail-on": ["critical=1", "high=1", "medium=1", "informational=1"],
+    "max-file-size": 100,
+    "output-path": "/work/fcs-report.json",
+    "path": ["."],
+    "policy-rule": "cloud",
+    "report-formats": ["json"],
+    "timeout": 300
+  },
+  "stats": {
+    "files_stats": {"total": 4, "failed_to_scan": 0, "skipped": 0},
+    "rule_stats": {"total_rules": 1850, "rules_enabled": 1850, "rules_failed_to_execute": 0}
+  },
+  "detection_summary": {"total": 0, "critical": 0, "high": 0, "medium": 0, "informational": 0},
+  "rule_detections": [],
+  "secrets_analysis": {"secrets": []},
+  "policy_violations": []
+}
