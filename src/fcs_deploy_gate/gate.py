@@ -89,7 +89,12 @@ def _terminated(content: str) -> str:
 
 
 def _write(path: Path, content: str) -> None:
-    path.write_text(_terminated(content), encoding="utf-8")
+    """Replace whatever is at ``path`` with a fresh regular file, never writing through a link
+    the scanned checkout might have planted there."""
+    path.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags, 0o644), "w", encoding="utf-8") as handle:
+        handle.write(_terminated(content))
 
 
 def _append(path: str | None, content: str) -> None:

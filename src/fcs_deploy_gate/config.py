@@ -108,6 +108,17 @@ def parse_args(argv: Sequence[str]) -> Config:
         raise ConfigurationError(
             "downloading the pinned fcs CLI is not available yet; pass --fcs-binary"
         )
+    # Resolved against the Gate's own working directory before the CLI is launched from the
+    # scanned directory, so a relative path can never pick up a binary planted in the checkout.
+    fcs_binary = Path(namespace.fcs_binary).resolve()
+    if not fcs_binary.is_file():
+        raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
+
+    work_dir = Path(namespace.work_dir)
+    if work_dir.is_symlink():
+        raise ConfigurationError(
+            f"--work-dir {namespace.work_dir!r} is a symlink; the Gate will not write through it"
+        )
 
     return Config(
         scan_path=scan_path.resolve(),
@@ -116,6 +127,6 @@ def parse_args(argv: Sequence[str]) -> Config:
         scope=namespace.scope,
         mode=namespace.mode,
         blocking_threshold=parse_blocking_threshold(namespace.blocking_threshold),
-        work_dir=Path(namespace.work_dir),
-        fcs_binary=Path(namespace.fcs_binary),
+        work_dir=work_dir,
+        fcs_binary=fcs_binary,
     )
