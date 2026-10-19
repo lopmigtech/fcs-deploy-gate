@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from tests.conftest import GateHarness
-from tests.test_whole_tree_verdict import (
+from tests.expected import (
     LOGS_BUCKET_WITHOUT_LOGGING,
     UNENCRYPTED_LOGS_BUCKET,
     observed,

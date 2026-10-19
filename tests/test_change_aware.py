@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 
-from tests.conftest import GateHarness
-from tests.test_whole_tree_verdict import (
+from tests.conftest import FIXTURE_REPORTS, GateHarness
+from tests.expected import (
     HARDCODED_ACCESS_KEY,
     LOGS_BUCKET_WITHOUT_LOGGING,
     PUBLIC_ACCESS_BLOCK_POLICY,
@@ -87,12 +89,6 @@ def test_whole_tree_records_no_baseline_and_counts_everything_as_new(gate: GateH
     assert result.verdict["total_findings"] == 7
     assert result.verdict["new_findings"] == 7
     assert "--upload-results" in result.invocations[0]["argv"]
-
-
-import json  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-from tests.conftest import FIXTURE_REPORTS  # noqa: E402
 
 
 def baseline_variant(tmp_path: Path, name: str, **changes: object) -> Path:
@@ -178,7 +174,13 @@ def test_change_aware_without_a_baseline_directory_is_a_blocked_verdict(
 
 def test_a_missing_baseline_directory_is_a_blocked_verdict(gate: GateHarness) -> None:
     result = gate(
-        "--scope", "change-aware", "--baseline-dir", str(gate.tmp_path / "nowhere"), today=TODAY
+        "--scope",
+        "change-aware",
+        "--baseline-dir",
+        str(gate.tmp_path / "nowhere"),
+        "--baseline-ref",
+        BASELINE_REF,
+        today=TODAY,
     )
 
     assert result.exit_code == 1
@@ -232,3 +234,47 @@ def test_a_failed_change_scan_in_change_aware_scope_is_a_scan_error(gate: GateHa
     assert "201" in result.verdict["error"]
     assert "Baseline" not in result.verdict["error"]
     assert len(result.invocations) == 2
+
+
+def test_whole_tree_error_verdicts_do_not_record_a_baseline_ref(gate: GateHarness) -> None:
+    result = gate("--baseline-ref", BASELINE_REF, exit_code=201, no_report=True, today=TODAY)
+
+    assert result.verdict["error"] is not None
+    assert result.verdict["baseline_ref"] is None
+
+
+def test_error_summaries_do_not_claim_a_finding_count(gate: GateHarness) -> None:
+    result = gate("--scope", "change-aware", "--baseline-error", "no usable Baseline", today=TODAY)
+
+    assert "new of" not in result.summary
+    assert "no usable Baseline" in result.summary
+
+
+def test_a_second_instance_of_a_pre_existing_identity_is_new(
+    gate: GateHarness, tmp_path: Path
+) -> None:
+    change = json.loads((FIXTURE_REPORTS / "findings.json").read_text())
+    secret = dict(change["secrets_analysis"]["secrets"][0])
+    secret["line_number"] = 42
+    change["secrets_analysis"]["secrets"].append(secret)  # a second key in the same file
+    change_path = tmp_path / "two-secrets.json"
+    change_path.write_text(json.dumps(change))
+    baseline = json.loads((FIXTURE_REPORTS / "baseline.json").read_text())
+    baseline["secrets_analysis"]["secrets"] = [change["secrets_analysis"]["secrets"][0]]
+    baseline_path = tmp_path / "baseline-one-secret.json"
+    baseline_path.write_text(json.dumps(baseline))
+
+    result = gate(report=change_path, baseline_report=baseline_path, today=TODAY)
+
+    secrets = [f for f in result.verdict["blocking_findings"] if f["rule_id"].startswith("secret/")]
+    assert len(secrets) == 1
+    assert result.verdict["total_findings"] == 8
+    assert result.verdict["new_findings"] == 5
+
+
+def test_a_baseline_directory_without_a_ref_is_a_configuration_error(gate: GateHarness) -> None:
+    result = gate(baseline_report="baseline.json", baseline_ref=None, today=TODAY)
+
+    assert result.exit_code == 2
+    assert "--baseline-ref" in result.stderr
+    assert result.invocations == []

@@ -136,3 +136,14 @@ def test_invalid_pipeline_type_exits_2() -> None:
     assert code == 2
     assert out == ""
     assert "pipeline" in err
+
+
+@pytest.mark.parametrize(
+    "bad", ["abc\ndef=1", "release 2026", "a\tb"], ids=["newline", "space", "tab"]
+)
+def test_a_candidate_with_whitespace_or_control_characters_exits_2(bad: str) -> None:
+    code, out, err = resolve("--pipeline", "branch", "--explicit-ref", bad)
+
+    assert code == 2
+    assert out == ""
+    assert "explicit-ref" in err

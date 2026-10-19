@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
@@ -68,14 +69,20 @@ def decide(
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
 ) -> Verdict:
-    """Whole-tree when ``baseline`` is None; otherwise Change-aware: only Findings whose
-    identity is absent from the Baseline are considered (ADR 0002)."""
+    """Whole-tree when ``baseline`` is None; otherwise Change-aware: each Baseline
+    occurrence of an identity accounts for one occurrence in the change, and any surplus
+    is new (ADR 0002). A second secret of the same type in the same file is therefore new."""
     ordered = sorted(findings, key=_ordering)
     if baseline is None:
         considered = ordered
     else:
-        known = {finding.identity for finding in baseline}
-        considered = [f for f in ordered if f.identity not in known]
+        known = Counter(finding.identity for finding in baseline)
+        considered = []
+        for finding in ordered:
+            if known[finding.identity] > 0:
+                known[finding.identity] -= 1
+            else:
+                considered.append(finding)
     counted, excluded, stale = apply_exclusions(considered, exclusions, today, present=ordered)
     return Verdict(
         blocking_findings=[f for f in counted if f.severity in blocking_threshold],

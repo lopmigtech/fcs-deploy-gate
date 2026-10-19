@@ -3,25 +3,16 @@ with their platform's variables, so the precedence lives in the core and not in 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import TextIO
 
-PIPELINES: tuple[str, ...] = ("merge-request", "branch")
-PipelineType = Literal["merge-request", "branch"]
+from fcs_deploy_gate.config import ConfigurationError, ResolveBaselineCommand
+
 ALL_ZEROS = "0" * 40
 EXPLICIT_REF_HINT = "pass an explicit Baseline ref to the Gate"
 
 
 class BaselineError(Exception):
-    """No usable Baseline. In Change-aware Scope this is a blocked Verdict, never a pass."""
-
-
-@dataclass(frozen=True)
-class BaselineCandidates:
-    pipeline: PipelineType
-    explicit_ref: str = ""
-    merge_base: str = ""
-    previous_commit: str = ""
+    """No usable Baseline. In Change-aware Scope this is a blocked Verdict, never a clear one."""
 
 
 def usable(value: str) -> bool:
@@ -29,7 +20,21 @@ def usable(value: str) -> bool:
     return bool(value) and value != ALL_ZEROS
 
 
-def resolve_baseline(candidates: BaselineCandidates) -> str:
+def well_formed(candidates: ResolveBaselineCommand) -> None:
+    """A candidate with whitespace or control characters is not a ref git could name, and
+    would break the one-line KEY=VALUE output: a configuration error, not a Baseline error."""
+    for name, value in (
+        ("explicit-ref", candidates.explicit_ref),
+        ("merge-base", candidates.merge_base),
+        ("previous-commit", candidates.previous_commit),
+    ):
+        if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value.strip()):
+            raise ConfigurationError(
+                f"--{name} contains whitespace or control characters: {value!r}"
+            )
+
+
+def resolve_baseline(candidates: ResolveBaselineCommand) -> str:
     """The Baseline ref: the explicit one when usable; otherwise the merge base in a
     merge-request pipeline or the previous commit in a branch pipeline. Empty and
     all-zeros values (a first push, a missing variable) are unusable."""
@@ -54,3 +59,14 @@ def resolve_baseline(candidates: BaselineCandidates) -> str:
 
 def _describe(value: str) -> str:
     return "all zeros" if value.strip() == ALL_ZEROS else "empty"
+
+
+def resolve_baseline_command(candidates: ResolveBaselineCommand, stdout: TextIO) -> int:
+    """One line of KEY=VALUE either way, so an adapter can append it to its outputs file
+    and hand the result to ``run`` without any logic of its own (ADR 0004)."""
+    well_formed(candidates)
+    try:
+        stdout.write(f"ref={resolve_baseline(candidates)}\n")
+    except BaselineError as exc:
+        stdout.write(f"error={exc}\n")
+    return 0

@@ -6,7 +6,7 @@ import json
 import os.path
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from fcs_deploy_gate.config import SEVERITIES
 
@@ -17,6 +17,16 @@ SECRET_SEVERITY = "high"
 
 class ReportError(Exception):
     """The report is missing, is not JSON, or says something the Gate cannot interpret."""
+
+
+class FindingIdentity(NamedTuple):
+    """What makes two Findings the same across scans (ADR 0002): rule id, normalised file,
+    resource type and resource name. The line number is ignored."""
+
+    rule_id: str
+    file: str | None
+    resource_type: str | None
+    resource_name: str | None
 
 
 @dataclass(frozen=True)
@@ -31,10 +41,8 @@ class Finding:
     description: str
 
     @property
-    def identity(self) -> tuple[str, str | None, str | None, str | None]:
-        """What makes two Findings the same across scans (ADR 0002): rule id, normalised
-        file, resource type and resource name. The line number is ignored."""
-        return (self.rule_id, self.file, self.resource_type, self.resource_name)
+    def identity(self) -> FindingIdentity:
+        return FindingIdentity(self.rule_id, self.file, self.resource_type, self.resource_name)
 
     @property
     def resource_address(self) -> str | None:

@@ -37,6 +37,8 @@ fcs-deploy-gate resolve-baseline --pipeline merge-request|branch \
 
 It prints one line, `ref=<ref>` or `error=<message>`, and exits 0 either way, so an adapter can append it to its outputs and pass the result on without logic of its own. The precedence is: an explicit ref the Consumer names wins; otherwise, in a merge-request or pull-request pipeline, the merge base with the target branch; otherwise, in a branch pipeline, the commit before the push. An empty value or an all-zeros commit is unusable. A first push to a branch has no previous commit, so it needs an explicit ref.
 
+The previous-commit default assumes a branch pipeline on a protected branch that is fed by gated merges: a Finding introduced by one merge is new, and blocked, in that pipeline. On an unprotected branch two pushes in a row would advance the Baseline past an unfixed Finding, which is why the merge-request pipeline compares against the merge base instead, and why tracking the last deployed ref is deferred rather than solved by "previous commit".
+
 An error line is passed to `run` as `--baseline-error`. A Change-aware run with a Baseline error, without a Baseline directory, or whose Baseline scan does not complete, is a blocked Verdict carrying the message (ADR 0001, ADR 0002): there is no way to fall back to scanning the whole tree silently. In Whole-tree Scope the Baseline inputs are ignored.
 
 ## Exclusions

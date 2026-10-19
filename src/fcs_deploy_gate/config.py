@@ -7,12 +7,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from fcs_deploy_gate.baseline import PIPELINES, BaselineCandidates
-
 SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "informational")
 DEFAULT_BLOCKING_THRESHOLD: frozenset[str] = frozenset({"critical", "high", "medium"})
 REGIONS: tuple[str, ...] = ("us-1", "us-2", "eu-1", "us-gov-1", "us-gov-2")
 SCOPES: tuple[str, ...] = ("whole-tree", "change-aware")
+PIPELINES: tuple[str, ...] = ("merge-request", "branch")
 MODES: tuple[str, ...] = ("enforcing", "advisory")
 
 
@@ -195,10 +194,20 @@ def _symlink_within(work_dir: Path) -> bool:
     return False
 
 
-def parse_args(argv: Sequence[str]) -> Config | BaselineCandidates:
+@dataclass(frozen=True)
+class ResolveBaselineCommand:
+    pipeline: str
+    explicit_ref: str
+    merge_base: str
+    previous_commit: str
+
+
+def parse_args(argv: Sequence[str]) -> Config | ResolveBaselineCommand:
+    """The parsed command: a ``Config`` for ``run``, or the candidates for
+    ``resolve-baseline``."""
     namespace = build_parser().parse_args(list(argv))
     if namespace.command == "resolve-baseline":
-        return BaselineCandidates(
+        return ResolveBaselineCommand(
             pipeline=namespace.pipeline,
             explicit_ref=namespace.explicit_ref,
             merge_base=namespace.merge_base,
@@ -221,6 +230,11 @@ def _run_config(namespace: argparse.Namespace) -> Config:
     fcs_binary = Path(namespace.fcs_binary).resolve()
     if not fcs_binary.is_file():
         raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
+
+    if namespace.scope == "change-aware" and namespace.baseline_dir and not namespace.baseline_ref:
+        raise ConfigurationError(
+            "--baseline-dir needs --baseline-ref so the Verdict records which Baseline was used"
+        )
 
     work_dir = Path(namespace.work_dir)
     if _symlink_within(work_dir):
