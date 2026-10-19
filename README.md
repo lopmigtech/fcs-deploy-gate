@@ -6,7 +6,7 @@ Vocabulary is defined in `GLOSSARY.md`; decisions with lasting consequences are 
 
 ## How the Gate decides
 
-What exists today is both Scopes through the run entry point with Exclusions, exercised with a fake CLI and fixture reports. The pinned CLI download is a later ticket.
+The core is complete through the run entry point: both Scopes, Exclusions, and the real CLI path (token, pinned download, retries). The suite proves it offline with a fake Falcon API and a fake CLI; the first live run happens in the work environment.
 
 ```sh
 fcs-deploy-gate run --path infra/prod --region us-gov-1 [--mode enforcing|advisory] \
@@ -17,14 +17,36 @@ fcs-deploy-gate run --path infra/prod --region us-gov-1 [--mode enforcing|adviso
 
 Until the pinned CLI download lands (ticket 5), the Gate refuses to run unless `--fcs-binary` names an `fcs` executable. That flag is the seam the test suite uses to substitute the fake CLI; adapters must never forward it.
 
-1. **The scan.** The Gate launches `fcs scan iac` from the scanned directory with a JSON report, `--fail-on` set to count every severity, the Falcon region, and upload to the console enabled under the project name (default: the repository directory name). The CLI never receives the Falcon client id or secret in its environment; the Gate strips them before launching it.
-2. **A result or an error.** A scan attempt counts as a result only when the CLI exits 0 or 40 and the report parses. Any other exit code, a missing report, or a report the Gate cannot interpret is a blocked Verdict carrying an error message. The Gate fails closed and has no bypass (ADR 0001).
-3. **Findings.** The report's rule detections become Findings with rule id `iac/<rule_uuid>`. Secrets become high-severity Findings with rule id `secret/<type>`. Policy violations become Findings at their stated severity with rule id `policy/<id>`. Severities are lower-cased, `low` is read as `informational`, and anything else is a report error. File paths are normalised relative to the scanned root.
-4. **Scope.** In Whole-tree Scope (the default) every Finding in the scanned path is considered. In Change-aware Scope the Gate also scans the Baseline, the Consumer's source as it was before the change, and considers only Findings whose identity (rule id, normalised file, resource type, resource name; the line number is ignored) is absent from the Baseline. A resource that was renamed or moved is therefore new; one that only shifted lines is not. The Baseline scan is never uploaded. See "Baseline" below.
-5. **The Verdict.** A considered Finding at or above the Blocking threshold that no active Exclusion covers is a Blocking finding; any Blocking finding is a blocked Verdict. The threshold defaults to critical, high and medium. A Consumer may add informational but cannot remove any of the three defaults.
-6. **Files the CLI could not scan.** The report's count of files the CLI failed to scan is shown in the summary and the verdict document. By default a non-zero count blocks the Verdict, since Findings in those files are unknown; `--no-block-on-unscanned-files` reports the count without blocking. Files the CLI skips by design, such as gitignored ones, are not counted.
-7. **Exit codes.** Enforcing mode exits 1 on a blocked Verdict. Advisory mode reports the same Verdict, prints a warning, and exits 0. Any configuration mistake (threshold, scope, mode, region, scan path) exits 2 in both modes before a scan is attempted.
-8. **Outputs.** The work directory receives `verdict.json`, `summary.md`, the raw `fcs-report.json` and, in Change-aware Scope, `fcs-report-baseline.json`. The summary is printed to the job log, appended to `GITHUB_STEP_SUMMARY` when that variable is set, and `verdict` plus `blocking_count` are appended to `GITHUB_OUTPUT`.
+1. **The CLI.** The Gate reads `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` from its environment, obtains a short-lived token from the region's API host, resolves the pinned CLI version through the download API, checks that the hash the API reports equals the pinned SHA-256 before downloading a byte, checks the downloaded archive against it too, and extracts only the `fcs` member (ADR 0003). The download is attempted up to three times with waits of ten then thirty seconds; exhausting them is a blocked Verdict. The Gate refuses to run while the pin is empty.
+2. **The scan.** The Gate launches `fcs scan iac` from the scanned directory with a JSON report, `--fail-on` set to count every severity, the Falcon region, the token, a 300-second scan timeout, and upload to the console enabled under the project name (default: the repository directory name). The client secret and id never reach the CLI, in its arguments or its environment. Proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) reach the Gate's own HTTP calls.
+3. **A result or an error.** A scan attempt counts as a result only when the CLI exits 0 or 40, the report parses, and the report shows the tenant's cloud rules were in force (`stats.rule_stats`; the CLI silently falls back to local rules on a bad token or missing region, and the exit code and report then look normal). Any other outcome is a scan error, retried up to three times with the same waits; exhausting them is a blocked Verdict carrying the last error. The Gate fails closed and has no bypass (ADR 0001): an outage halts Enforcing Deployments until it recovers, and a Consumer that cannot tolerate that runs in Advisory mode, consciously.
+4. **Findings.** The report's rule detections become Findings with rule id `iac/<rule_uuid>`. Secrets become high-severity Findings with rule id `secret/<type>`. Policy violations become Findings at their stated severity with rule id `policy/<id>`. Severities are lower-cased, `low` is read as `informational`, and anything else is a report error. File paths are normalised relative to the scanned root.
+5. **Scope.** In Whole-tree Scope (the default) every Finding in the scanned path is considered. In Change-aware Scope the Gate also scans the Baseline, the Consumer's source as it was before the change, and considers only Findings whose identity (rule id, normalised file, resource type, resource name; the line number is ignored) is absent from the Baseline. A resource that was renamed or moved is therefore new; one that only shifted lines is not. The Baseline scan is never uploaded. See "Baseline" below.
+6. **The Verdict.** A considered Finding at or above the Blocking threshold that no active Exclusion covers is a Blocking finding; any Blocking finding is a blocked Verdict. The threshold defaults to critical, high and medium. A Consumer may add informational but cannot remove any of the three defaults.
+7. **Files the CLI could not scan.** The report's count of files the CLI failed to scan is shown in the summary and the verdict document. By default a non-zero count blocks the Verdict, since Findings in those files are unknown; `--no-block-on-unscanned-files` reports the count without blocking. Files the CLI skips by design, such as gitignored ones, are not counted.
+8. **Exit codes.** Enforcing mode exits 1 on a blocked Verdict. Advisory mode reports the same Verdict, prints a warning, and exits 0. Any configuration mistake (threshold, scope, mode, region, scan path) exits 2 in both modes before a scan is attempted.
+9. **Outputs.** The work directory receives `verdict.json`, `summary.md`, the raw `fcs-report.json` and, in Change-aware Scope, `fcs-report-baseline.json`. The summary is printed to the job log, appended to `GITHUB_STEP_SUMMARY` when that variable is set, and `verdict` plus `blocking_count` are appended to `GITHUB_OUTPUT`.
+
+## API clients, the pin and the bounds
+
+Two Falcon API clients exist and are never the same one:
+
+| Client | Where it lives | Scopes | Used for |
+|---|---|---|---|
+| CI client | Organisation (GitHub) or group (GitLab) secrets, scoped to Consumer repositories | Cloud Security Tools Download: READ; Infrastructure as Code: READ and WRITE | The Gate: CLI download, scan with cloud rules, upload |
+| Mapping client | A laptop, never CI | CSPM registration: READ; Cloud Security Policies: READ; Cloud Security API Detections: READ; Cloud Security API Assets: READ | The IaC-rule-to-IOM mapping measurement (ADR 0005) |
+
+CSPM registration WRITE is never granted to either. A leaked CI credential can download the CLI and scan; it cannot enumerate the tenant's IOMs or assets.
+
+**The pin.** The CLI version and the SHA-256 of its linux/amd64 archive are constants in `src/fcs_deploy_gate/download.py`. To fill or bump them, from a machine with the CI client's credentials in the environment:
+
+```sh
+fcs-deploy-gate pin --region us-gov-1 [--version X.Y.Z]
+```
+
+It prints `version=`, `sha256=`, `file_name=` and `size=` for the published release (the pinned version by default). Put the values in the constants by pull request, with a note on rule and severity changes between versions. The Gate refuses to download while the hash is empty, and refuses to use an archive whose reported or actual hash differs from it.
+
+**Bounds.** Three attempts with waits of ten then thirty seconds, for the download and for each scan separately; a 300-second scan timeout passed to the CLI; a 60-second timeout on each of the Gate's own HTTP calls. Adapters set a fifteen-minute job timeout.
 
 ## Baseline
 

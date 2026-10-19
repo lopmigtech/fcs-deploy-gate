@@ -6,7 +6,7 @@ import os
 import shutil
 import socket
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,9 @@ from typing import Any
 import pytest
 
 from fcs_deploy_gate import run
+from fcs_deploy_gate.clock import Clock
+from fcs_deploy_gate.download import CliPin
+from fcs_deploy_gate.http import Transport
 
 TESTS_DIR = Path(__file__).parent
 FIXTURE_REPORTS = TESTS_DIR / "fixtures" / "reports"
@@ -85,6 +88,10 @@ class GateHarness:
         baseline_report: str | Path | None = None,
         baseline_ref: str | None = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
         baseline_exit_code: int = 40,
+        transport: Transport | None = None,
+        clock: Clock | None = None,
+        pin: CliPin | None = None,
+        fake_binary: bool = True,
     ) -> GateRun:
         """Call the Gate. ``baseline_report`` switches the call to Change-aware Scope: a
         Baseline directory is created, the fake CLI returns ``baseline_report`` for the
@@ -112,10 +119,8 @@ class GateHarness:
             scope_args = ["--scope", "change-aware", "--baseline-dir", str(self.baseline_dir)]
             if baseline_ref is not None:
                 scope_args += ["--baseline-ref", baseline_ref]
-            run_env["FAKE_FCS_REPORTS"] = os.pathsep.join(
-                [str(fixture_report(baseline_report)), str(fixture_report(report or "clean.json"))]
-            )
-            run_env["FAKE_FCS_EXIT_CODES"] = f"{baseline_exit_code},{exit_code or 40}"
+            run_env["FAKE_FCS_BASELINE_REPORT"] = str(fixture_report(baseline_report))
+            run_env["FAKE_FCS_BASELINE_EXIT_CODE"] = str(baseline_exit_code)
         if no_report:
             run_env["FAKE_FCS_NO_REPORT"] = "1"
         if env:
@@ -129,13 +134,21 @@ class GateHarness:
             "us-gov-1",
             "--work-dir",
             str(work_dir),
-            "--fcs-binary",
-            str(FAKE_FCS),
+            *(["--fcs-binary", str(FAKE_FCS)] if fake_binary else []),
             *scope_args,
             *args,
         ]
         stdout, stderr = io.StringIO(), io.StringIO()
-        code = run(argv, env=run_env, stdout=stdout, stderr=stderr, today=today)
+        code = run(
+            argv,
+            env=run_env,
+            stdout=stdout,
+            stderr=stderr,
+            today=today,
+            transport=transport,
+            clock=clock or FakeClock(),
+            pin=pin,
+        )
         verdict_file = work_dir / "verdict.json"
         summary_file = work_dir / "summary.md"
         return GateRun(
@@ -158,6 +171,21 @@ class GateHarness:
 def fixture_report(report: str | Path) -> Path:
     path = Path(report)
     return path if path.is_absolute() else FIXTURE_REPORTS / path
+
+
+@dataclass
+class FakeClock:
+    """A clock whose sleeps are recorded instead of waited for; the harness default, so
+    the retry waits of ten and thirty seconds never slow the suite down."""
+
+    fixed_today: date = date(2026, 10, 19)
+    waits: list[float] = field(default_factory=list)
+
+    def today(self) -> date:
+        return self.fixed_today
+
+    def sleep(self, seconds: float) -> None:
+        self.waits.append(seconds)
 
 
 @pytest.fixture(autouse=True)

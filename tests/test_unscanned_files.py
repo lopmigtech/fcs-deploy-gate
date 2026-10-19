@@ -75,7 +75,7 @@ def test_a_report_without_file_stats_counts_no_unscanned_files(
     gate: GateHarness, tmp_path: Path
 ) -> None:
     report = json.loads((FIXTURE_REPORTS / "clean.json").read_text())
-    del report["stats"]
+    del report["stats"]["files_stats"]
     path = tmp_path / "no-stats.json"
     path.write_text(json.dumps(report))
 

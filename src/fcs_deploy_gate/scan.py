@@ -61,9 +61,11 @@ def scan_iac(
     upload: bool,
     project_name: str | None = None,
     report_filename: str = REPORT_FILENAME,
+    token: str | None = None,
 ) -> ScanAttempt:
     """One ``fcs scan iac`` of ``scan_path``. Only the scan of the change is uploaded to
-    the console; a Baseline scan never is (ADR 0002)."""
+    the console; a Baseline scan never is (ADR 0002). The short-lived token, when there
+    is one, is a single argument; the client secret never appears anywhere."""
     # A report left by an earlier run in a reused workspace must never be judged as this
     # run's result (ADR 0001): only what this invocation writes counts. The entry is
     # unlinked before the path is resolved, so a planted symlink is removed, never followed.
@@ -87,6 +89,8 @@ def scan_iac(
         "--falcon-region",
         region,
     ]
+    if token:
+        command += ["--falcon-token", token]
     if upload:
         command += ["--upload-results"]
         if project_name:

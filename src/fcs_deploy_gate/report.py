@@ -198,6 +198,25 @@ def unscanned_file_count(report: dict[str, Any]) -> int:
     return count if count is not None and count > 0 else 0
 
 
+def require_cloud_rules_evidence(report: dict[str, Any]) -> None:
+    """The CLI silently falls back to local rules on a bad token or missing region, and the
+    exit code and report then look normal. ``stats.rule_stats`` is the evidence that the
+    tenant's rules were in force (field name provisional until the first live run); its
+    absence, or a zero count, is a scan error."""
+    stats = report.get("stats")
+    rules = stats.get("rule_stats") if isinstance(stats, dict) else None
+    counts = [
+        _optional_int(rules.get(key)) if isinstance(rules, dict) else None
+        for key in ("rules_enabled", "total_rules")
+    ]
+    if not any(count is not None and count > 0 for count in counts):
+        raise ReportError(
+            "no evidence that the tenant's cloud rules were in force: stats.rule_stats is "
+            "missing or reports zero rules (a bad token or missing region makes the CLI fall "
+            "back to local rules silently)"
+        )
+
+
 def findings_from_report(report: dict[str, Any], scan_root: Path) -> list[Finding]:
     return [
         *_rule_detection_findings(report, scan_root),

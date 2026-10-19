@@ -5,26 +5,53 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, TextIO
 
 from fcs_deploy_gate.baseline import EXPLICIT_REF_HINT, resolve_baseline_command
-from fcs_deploy_gate.config import Config, ConfigurationError, ResolveBaselineCommand, parse_args
+from fcs_deploy_gate.clock import Clock, SystemClock
+from fcs_deploy_gate.config import (
+    Config,
+    ConfigurationError,
+    PinCommand,
+    ResolveBaselineCommand,
+    parse_args,
+)
+from fcs_deploy_gate.download import (
+    PIN,
+    CliPin,
+    DownloadError,
+    install_cli,
+    reported_hash,
+    select_resource,
+)
 from fcs_deploy_gate.exclusions import (
     EXCLUSION_FILENAME,
     Exclusion,
     load_exclusions,
     repository_root,
 )
+from fcs_deploy_gate.falcon import (
+    CLIENT_ID_VAR,
+    CLIENT_SECRET_VAR,
+    Credentials,
+    FalconApi,
+    FalconError,
+)
+from fcs_deploy_gate.http import ProxySettings, Transport, UrllibTransport
 from fcs_deploy_gate.report import (
     Finding,
     ReportError,
     findings_from_report,
     load_report,
+    require_cloud_rules_evidence,
     unscanned_file_count,
 )
+from fcs_deploy_gate.retry import RetriesExhausted, with_retries
 from fcs_deploy_gate.scan import BASELINE_REPORT_FILENAME, REPORT_FILENAME, scan_iac
 from fcs_deploy_gate.summary import render_summary
 from fcs_deploy_gate.verdict import Verdict, decide, verdict_document
@@ -40,14 +67,31 @@ def run(
     stdout: TextIO,
     stderr: TextIO,
     today: date | None = None,
+    clock: Clock | None = None,
+    transport: Transport | None = None,
+    pin: CliPin | None = None,
 ) -> int:
-    """The Gate. ``today`` is the clock seam: the UTC date unless a test overrides it."""
-    today = today or datetime.now(UTC).date()
+    """The Gate, behind its three injected boundaries: the HTTP ``transport``, the
+    ``clock`` (waits and today's date; ``today`` alone fixes the date), and the process
+    runner, which is whatever ``--fcs-binary`` or the downloaded CLI is. ``pin`` exists so
+    tests can pin the archive they serve; the real pin is a constant in the code."""
+    clock = clock or SystemClock()
+    today = today or clock.today()
+    transport = transport or UrllibTransport()
+    pin = pin or PIN
     try:
         command = parse_args(argv)
         if isinstance(command, ResolveBaselineCommand):
             return resolve_baseline_command(command, stdout)
+        if isinstance(command, PinCommand):
+            return _pin_command(command, env, transport, pin, stdout, stderr)
         config = command
+        credentials = _credentials_for(config, env)
+        if config.fcs_binary is None and not pin.filled:
+            raise ConfigurationError(
+                "the fcs CLI checksum pin is empty; fill it from the work environment with "
+                f"`fcs-deploy-gate pin --region {config.region}` and a pull request"
+            )
         root = repository_root(config.scan_path)
         if not (root / ".git").exists():
             stderr.write(
@@ -61,7 +105,13 @@ def run(
 
     config.work_dir.mkdir(parents=True, exist_ok=True)
     project_name = config.project_name or root.resolve().name
-    verdict = _scan_and_judge(config, env, exclusions, today, project_name)
+    api = FalconApi(transport=transport, region=config.region, proxy=ProxySettings.from_env(env))
+    with tempfile.TemporaryDirectory(prefix="fcs-cli-", dir=config.work_dir) as cli_dir:
+        tools = _prepare_cli(config, credentials, api, pin, clock, Path(cli_dir))
+        if isinstance(tools, Verdict):
+            verdict = tools
+        else:
+            verdict = _scan_and_judge(config, env, exclusions, today, project_name, tools, clock)
     summary = render_summary(verdict, config)
 
     document = json.dumps(verdict_document(verdict, config), indent=2)
@@ -96,15 +146,92 @@ def _advisory_warning(verdict: Verdict) -> str:
     )
 
 
+def _credentials_for(config: Config, env: Mapping[str, str]) -> Credentials | None:
+    """The Falcon credentials, required unless a test seam supplies the binary."""
+    credentials = Credentials.from_env(env)
+    if config.fcs_binary is None and credentials is None:
+        raise ConfigurationError(
+            f"{CLIENT_ID_VAR} and {CLIENT_SECRET_VAR} must be set in the environment "
+            "(the Gate obtains its own short-lived token from them)"
+        )
+    return credentials
+
+
+@dataclass(frozen=True)
+class _Tools:
+    """What a scan needs: the binary to run and the token to hand it, if any."""
+
+    binary: Path
+    token: str | None
+
+
+def _prepare_cli(
+    config: Config,
+    credentials: Credentials | None,
+    api: FalconApi,
+    pin: CliPin,
+    clock: Clock,
+    cli_dir: Path,
+) -> _Tools | Verdict:
+    """The test seam binary as given, or the pinned CLI downloaded and verified with a
+    fresh token, retried; exhausting the retries is a blocked Verdict (ADR 0001)."""
+    if config.fcs_binary is not None:
+        return _Tools(binary=config.fcs_binary, token=None)
+    assert credentials is not None and pin.filled  # run() checked both before any work
+
+    def download() -> _Tools:
+        token = api.token(credentials)
+        return _Tools(binary=install_cli(api, token, pin, cli_dir), token=token)
+
+    try:
+        return with_retries("the fcs CLI download", download, clock, (FalconError, DownloadError))
+    except RetriesExhausted as exc:
+        return _blocked(config, str(exc))
+
+
+def _pin_command(
+    command: PinCommand,
+    env: Mapping[str, str],
+    transport: Transport,
+    pin: CliPin,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    """Print the published version, SHA-256, file name and size, for a maintainer to fill
+    the pin by pull request."""
+    credentials = Credentials.from_env(env)
+    if credentials is None:
+        raise ConfigurationError(
+            f"{CLIENT_ID_VAR} and {CLIENT_SECRET_VAR} must be set in the environment"
+        )
+    api = FalconApi(transport=transport, region=command.region, proxy=ProxySettings.from_env(env))
+    version = command.version or pin.version
+    try:
+        resource = select_resource(api.download_info(api.token(credentials), version), version)
+        digest = reported_hash(resource)
+    except (FalconError, DownloadError) as exc:
+        stderr.write(f"fcs-deploy-gate: error: {exc}\n")
+        return 1
+    stdout.write(
+        f"version={resource.get('file_version')}\n"
+        f"sha256={digest}\n"
+        f"file_name={resource.get('file_name')}\n"
+        f"size={resource.get('size')}\n"
+    )
+    return 0
+
+
 def _scan_and_judge(
     config: Config,
     env: Mapping[str, str],
     exclusions: list[Exclusion],
     today: date,
     project_name: str,
+    tools: _Tools,
+    clock: Clock,
 ) -> Verdict:
     """Fail closed (ADR 0001): a Baseline that cannot be used, a scan that did not
-    complete, or a report the Gate cannot read, blocks."""
+    complete after its retries, or a report the Gate cannot trust, blocks."""
     baseline: list[Finding] | None = None
     if config.change_aware:
         if config.baseline_error:
@@ -117,16 +244,25 @@ def _scan_and_judge(
                 f"the Baseline ref out and pass --baseline-dir, or the Consumer must "
                 f"{EXPLICIT_REF_HINT}",
             )
+        baseline_dir = config.baseline_dir
         try:
-            report = _scan(config, env, config.baseline_dir, BASELINE_REPORT_FILENAME)
-            baseline = findings_from_report(report, config.baseline_dir)
-        except ReportError as exc:
-            return _blocked(config, f"the Baseline scan did not produce a usable report: {exc}")
+            _, baseline = with_retries(
+                "the Baseline scan",
+                lambda: _scan(config, env, tools, baseline_dir, BASELINE_REPORT_FILENAME),
+                clock,
+                (ReportError,),
+            )
+        except RetriesExhausted as exc:
+            return _blocked(config, str(exc))
 
     try:
-        report = _scan(config, env, config.scan_path, upload_as=project_name)
-        findings = findings_from_report(report, config.scan_path)
-    except ReportError as exc:
+        report, findings = with_retries(
+            "the scan",
+            lambda: _scan(config, env, tools, config.scan_path, upload_as=project_name),
+            clock,
+            (ReportError,),
+        )
+    except RetriesExhausted as exc:
         return _blocked(config, str(exc))
     return decide(
         findings,
@@ -143,16 +279,18 @@ def _scan_and_judge(
 def _scan(
     config: Config,
     env: Mapping[str, str],
+    tools: _Tools,
     directory: Path,
     report_filename: str = REPORT_FILENAME,
     *,
     upload_as: str | None = None,
-) -> dict[str, Any]:
-    """The report of one completed scan of ``directory``; uploaded to the console under
-    ``upload_as`` when given (the change), never otherwise (the Baseline). A scan that did
-    not complete is a ReportError."""
+) -> tuple[dict[str, Any], list[Finding]]:
+    """The report and Findings of one completed, trustworthy scan of ``directory``;
+    uploaded to the console under ``upload_as`` when given (the change), never otherwise
+    (the Baseline). A scan that did not complete, a report without cloud-rules evidence,
+    or one the Gate cannot interpret is a ReportError, which the caller retries."""
     attempt = scan_iac(
-        fcs_binary=config.fcs_binary,
+        fcs_binary=tools.binary,
         scan_path=directory,
         region=config.region,
         work_dir=config.work_dir,
@@ -160,10 +298,13 @@ def _scan(
         upload=upload_as is not None,
         project_name=upload_as,
         report_filename=report_filename,
+        token=tools.token,
     )
     if not attempt.completed:
         raise ReportError(attempt.failure_message())
-    return load_report(attempt.report_path)
+    report = load_report(attempt.report_path)
+    require_cloud_rules_evidence(report)
+    return report, findings_from_report(report, directory)
 
 
 def _blocked(config: Config, message: str) -> Verdict:

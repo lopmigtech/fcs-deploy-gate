@@ -33,7 +33,7 @@ class Config:
     mode: str
     blocking_threshold: frozenset[str]
     work_dir: Path
-    fcs_binary: Path
+    fcs_binary: Path | None
     block_on_unscanned_files: bool
     baseline_dir: Path | None
     baseline_ref: str | None
@@ -66,7 +66,24 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
     _add_run_command(commands)
     _add_resolve_baseline_command(commands)
+    _add_pin_command(commands)
     return parser
+
+
+def _add_pin_command(commands: argparse._SubParsersAction[_Parser]) -> None:
+    parser = commands.add_parser(
+        "pin",
+        help="Print the published version and SHA-256 of the fcs CLI, to fill the pin.",
+        description=(
+            "Queries the download API with the Falcon credentials from the environment and "
+            "prints the published version, SHA-256, file name and size of the fcs CLI for "
+            "linux/amd64, so a maintainer can fill the checksum pin by pull request."
+        ),
+    )
+    parser.add_argument("--region", required=True, choices=REGIONS, help="Falcon region.")
+    parser.add_argument(
+        "--version", default=None, help="Version to look up; defaults to the pinned version."
+    )
 
 
 def _add_resolve_baseline_command(commands: argparse._SubParsersAction[_Parser]) -> None:
@@ -150,7 +167,10 @@ def _add_run_command(commands: argparse._SubParsersAction[_Parser]) -> None:
     parser.add_argument(
         "--fcs-binary",
         default=None,
-        help="Path to an fcs binary to use instead of downloading the pinned release.",
+        help=(
+            "Test seam: an fcs executable to run instead of downloading the pinned release; "
+            "no token is obtained and no network call is made. Adapters never pass it."
+        ),
     )
 
 
@@ -202,9 +222,15 @@ class ResolveBaselineCommand:
     previous_commit: str
 
 
-def parse_args(argv: Sequence[str]) -> Config | ResolveBaselineCommand:
-    """The parsed command: a ``Config`` for ``run``, or the candidates for
-    ``resolve-baseline``."""
+@dataclass(frozen=True)
+class PinCommand:
+    region: str
+    version: str | None
+
+
+def parse_args(argv: Sequence[str]) -> Config | ResolveBaselineCommand | PinCommand:
+    """The parsed command: a ``Config`` for ``run``, the candidates for
+    ``resolve-baseline``, or the lookup for ``pin``."""
     namespace = build_parser().parse_args(list(argv))
     if namespace.command == "resolve-baseline":
         return ResolveBaselineCommand(
@@ -213,6 +239,8 @@ def parse_args(argv: Sequence[str]) -> Config | ResolveBaselineCommand:
             merge_base=namespace.merge_base,
             previous_commit=namespace.previous_commit,
         )
+    if namespace.command == "pin":
+        return PinCommand(region=namespace.region, version=namespace.version or None)
     return _run_config(namespace)
 
 
@@ -221,15 +249,14 @@ def _run_config(namespace: argparse.Namespace) -> Config:
     if not scan_path.is_dir():
         raise ConfigurationError(f"--path {namespace.path!r} is not a directory")
 
-    if namespace.fcs_binary is None:
-        raise ConfigurationError(
-            "downloading the pinned fcs CLI is not available yet; pass --fcs-binary"
-        )
-    # Resolved against the Gate's own working directory before the CLI is launched from the
-    # scanned directory, so a relative path can never pick up a binary planted in the checkout.
-    fcs_binary = Path(namespace.fcs_binary).resolve()
-    if not fcs_binary.is_file():
-        raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
+    fcs_binary: Path | None = None
+    if namespace.fcs_binary is not None:
+        # Resolved against the Gate's own working directory before the CLI is launched from
+        # the scanned directory, so a relative path can never pick up a binary planted in
+        # the checkout.
+        fcs_binary = Path(namespace.fcs_binary).resolve()
+        if not fcs_binary.is_file():
+            raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
 
     if namespace.scope == "change-aware" and namespace.baseline_dir and not namespace.baseline_ref:
         raise ConfigurationError(

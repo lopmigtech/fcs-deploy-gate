@@ -224,7 +224,7 @@ def test_a_failed_baseline_scan_is_a_scan_error_and_the_change_is_not_scanned(
     assert result.verdict["verdict"] == "blocked"
     assert "Baseline" in result.verdict["error"]
     assert "201" in result.verdict["error"]
-    assert len(result.invocations) == 1
+    assert all("--upload-results" not in i["argv"] for i in result.invocations)  # no change scan
 
 
 def test_a_failed_change_scan_in_change_aware_scope_is_a_scan_error(gate: GateHarness) -> None:
@@ -233,7 +233,7 @@ def test_a_failed_change_scan_in_change_aware_scope_is_a_scan_error(gate: GateHa
     assert result.exit_code == 1
     assert "201" in result.verdict["error"]
     assert "Baseline" not in result.verdict["error"]
-    assert len(result.invocations) == 2
+    assert sum("--upload-results" not in i["argv"] for i in result.invocations) == 1
 
 
 def test_whole_tree_error_verdicts_do_not_record_a_baseline_ref(gate: GateHarness) -> None:
