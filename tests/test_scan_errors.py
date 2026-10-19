@@ -101,3 +101,19 @@ def test_a_report_left_by_an_earlier_run_is_never_judged_again(gate: GateHarness
     assert second.exit_code == 1
     assert second.verdict["blocking_findings"] == []
     assert "wrote no report" in second.verdict["error"]
+
+
+def test_a_planted_symlink_at_the_report_path_is_removed_not_followed(
+    gate: GateHarness, tmp_path: Path
+) -> None:
+    sentinel = tmp_path / "elsewhere.txt"
+    sentinel.write_text("must survive")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "fcs-report.json").symlink_to(sentinel)
+
+    result = gate()
+
+    assert sentinel.read_text() == "must survive"
+    assert not (work_dir / "fcs-report.json").is_symlink()
+    assert result.verdict["error"] is None

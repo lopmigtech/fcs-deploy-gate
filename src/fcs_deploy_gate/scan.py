@@ -58,10 +58,12 @@ def scan_iac(
     work_dir: Path,
     env: Mapping[str, str],
 ) -> ScanAttempt:
-    report_path = (work_dir / REPORT_FILENAME).resolve()
     # A report left by an earlier run in a reused workspace must never be judged as this
-    # run's result (ADR 0001): only what this invocation writes counts.
+    # run's result (ADR 0001): only what this invocation writes counts. The entry is
+    # unlinked before the path is resolved, so a planted symlink is removed, never followed.
+    report_path = work_dir / REPORT_FILENAME
     report_path.unlink(missing_ok=True)
+    report_path = report_path.resolve()
     command = [
         str(fcs_binary),
         "scan",
