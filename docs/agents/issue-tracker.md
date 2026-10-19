@@ -2,8 +2,6 @@
 
 Issues and specs for this repo live as GitHub issues at `github.com/lopmigtech/fcs-deploy-gate`. Use the `gh` CLI for all operations.
 
-> Status 2026-10-19: the GitHub remote does not exist yet and `gh` is not installed in the WSL environment. Once both are in place, create the five triage labels from `docs/agents/triage-labels.md` with `gh label create`. Until then, skills that would publish to the tracker should say so and stop rather than fall back to local files.
-
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
