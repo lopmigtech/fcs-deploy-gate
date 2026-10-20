@@ -1,0 +1,34 @@
+# The GitHub live check, run by hand only (Actions, "Live check", "Run workflow"). It calls
+# the reusable workflow from this checkout, whose single step uses the composite action at
+# the pinned tag, against the insecure fixture, in Advisory mode unless told otherwise. The
+# organisation secrets FALCON_CLIENT_ID and FALCON_CLIENT_SECRET must be visible to this
+# repository. Nothing else triggers it.
+name: Live check
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Falcon region: us-1, us-2, eu-1, us-gov-1 or us-gov-2."
+        required: true
+        type: string
+      mode:
+        description: advisory for the first runs; enforcing to see the block.
+        required: false
+        type: choice
+        options: [advisory, enforcing]
+        default: advisory
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: ./.github/workflows/gate.yml
+    with:
+      path: tests/fixtures/terraform/insecure-bucket
+      region: ${{ inputs.region }}
+      mode: ${{ inputs.mode }}
+    secrets:
+      falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+      falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}

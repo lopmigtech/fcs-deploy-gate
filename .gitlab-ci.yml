@@ -1,0 +1,16 @@
+# The GitLab live check, run by hand only (CI/CD, Pipelines, "Run pipeline" on the default
+# branch, with FCS_GATE_REGION set in the form unless the instance sets it). It includes the
+# template from this checkout; the job clones this very project at the pinned tag with the
+# job token and scans the insecure fixture in Advisory mode. Mirror updates and pushes
+# create no pipeline here.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+include:
+  - local: /gitlab/fcs-deploy-gate.gitlab-ci.yml
+
+variables:
+  FCS_GATE_PROJECT: $CI_PROJECT_PATH
+  FCS_GATE_PATH: tests/fixtures/terraform/insecure-bucket
+  FCS_GATE_MODE: advisory

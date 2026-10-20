@@ -175,7 +175,59 @@ exclusions:
 
 The summary and `verdict.json` list excluded Findings paired with their Exclusion, and the stale Exclusions with why they are stale.
 
-A clear Verdict means no IaC Findings at or above the Blocking threshold. It does not yet mean that no IOM will appear: which IaC rules correspond to IOMs in the tenant has not been measured (ADR 0005).
+## What a clear Verdict means
+
+A clear Verdict means no IaC Findings at or above the Blocking threshold in the call's Scope, after Exclusions. It does not yet mean that no IOM will appear once the change is deployed: which IaC rules correspond to IOMs in the tenant has not been measured, so v1 blocks on the whole superset (ADR 0005). Until the mapping says otherwise, read a clear Verdict as "the CLI found nothing at threshold" and a blocked one as "something at threshold, which may or may not have become an IOM".
+
+Two exception channels exist, and no third:
+
+- **Console exemptions** govern IOMs on resources that already exist. The Security team sets them in the Falcon console; the Gate does not read them (deferred until the mapping exists).
+- **Exclusions** govern Findings on resources about to be deployed. They are version-controlled in the Consumer's `.fcs-gate.yml`, approved by a named Security team member, and expire (see "Exclusions").
+
+A Finding excluded here still reaches the console in the uploaded scan, and an IOM exempted in the console still blocks here when its IaC rule fires. Neither channel substitutes for the other.
+
+## Handoff to the work environment
+
+No Falcon tenant exists where the Gate is built, so everything that needs one happens in the work environment through a handoff: the first live verification (issue #9), then the IOM mapping (issue #10). The kit:
+
+- **The wizard**, `scripts/handoff-wizard.sh`. Run it from the repository root inside a virtualenv with the Gate installed (`pip install -e '.[dev]'`). It walks through the steps only a person can perform, in order: migrating the repository, creating the CI client and the read-only mapping client with their exact scopes, placing the organisation and group secrets, enabling the repository access policy on GitHub and the job-token allowlist and image mirror on GitLab, filling the checksum pin and opening its pull request, cutting the release tag, the first Advisory run on each platform, capturing the real report, and confirming the console upload. It pauses at every manual action and records what was confirmed in `.env` (gitignored, mode 0600). Client secrets are held in memory for the run and never written. Stop it with Ctrl-C and re-run; it offers the values already recorded.
+- **The insecure fixture**, `tests/fixtures/terraform/insecure-bucket/`: one public, unencrypted, unlogged, untagged S3 bucket with no credentials of any kind, for the live runs to find. Scan it freely; apply it only in the sandbox account, and destroy it afterwards.
+- **The live checks**: `.github/workflows/live-check.yml` (Actions, "Live check", "Run workflow", with the region and the mode) and this repository's own `.gitlab-ci.yml` (CI/CD, Pipelines, "Run pipeline", with `FCS_GATE_REGION`). Each scans the fixture through its adapter in Advisory mode and runs by hand only.
+
+## Release procedure
+
+A release is one commit and one tag, and the tag never moves.
+
+1. Bump the package version in `pyproject.toml` and both adapter references with it: the `uses:` line in `.github/workflows/gate.yml` and `FCS_GATE_REF` in `gitlab/fcs-deploy-gate.gitlab-ci.yml`; the README snippets follow. The adapter tests fail while any of the three disagree, so a release cannot ship half-updated.
+2. If the CLI pin changed, say so in the pull request with a note on rule and severity changes (ADR 0003).
+3. Merge, then tag the merge commit on `main` (`git tag -a vX.Y.Z -m "fcs-deploy-gate vX.Y.Z"`) and push the tag. Tags are immutable semver: there is no moving major tag, and a tag is never moved or deleted. A mistake is a new patch release.
+4. GitHub is canonical. The GitLab instance holds the Gate project as a pull mirror when it can reach GitHub, and the tag arrives with the next mirror update ("Update now" hurries it). When it cannot, push `main` and the tag to the GitLab remote as well, in the same sitting.
+5. Consumers move by changing their pinned tag. Nothing moves under them.
+
+## Migration checklist
+
+Moving the Gate to the work organisation is a known, small edit plus settings only an administrator can make. The wizard performs the first item and walks through the rest.
+
+- **The single hardcoded reference.** The repository's owner and name appear once in code, the `uses:` line of `.github/workflows/gate.yml` that names the composite action; the README quick start echoes it and `tests/adapters.py` holds it for the tests. Replace `lopmigtech/fcs-deploy-gate` with `<org>/fcs-deploy-gate` wherever it appears (`git grep -l lopmigtech/fcs-deploy-gate`) and run the adapter tests. The GitLab side has no equivalent: the template names the Gate project through `FCS_GATE_PROJECT`, set on the instance.
+- **Secrets.** `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` as organisation secrets on GitHub, visible to the Consumer repositories and to the Gate repository itself (the live check needs them); as masked group variables on GitLab, unprotected if merge-request pipelines are to run the Gate (the GitLab quick start states the trust boundary that implies).
+- **Access policies.** On GitHub, the Gate repository's Actions access policy set to "Accessible from repositories in the organization", and the organisation's allowed-actions policy admitting `actions/checkout`, `actions/setup-python` and `actions/upload-artifact`. On GitLab, the Gate project's job-token allowlist admitting the Consumer group, and read access to the project for the users who trigger pipelines.
+- **Image mirror and instance variables.** A mirror of the full `python:3.12` image in the internal registry, named by `FCS_GATE_IMAGE`, and `FCS_GATE_PROJECT` set to the Gate project's path, both as group or instance variables.
+- **Mirror.** The GitLab project as a pull mirror of the GitHub repository, or a second push remote (release procedure, step 4).
+- **Egress.** Runner egress to the Falcon API host for the region, to the pre-signed download host, and to PyPI or an internal index.
+- **Issue tracker.** `AGENTS.md` and `docs/agents/issue-tracker.md` point at this repository's issues; they change only if the issues move.
+
+## Verified only in the work environment
+
+These cannot be checked where the Gate is built, and they are the content of the first live run (issue #9):
+
+- The checksum pin: the version the download API publishes for linux/amd64 and its SHA-256, filled with `fcs-deploy-gate pin` and committed before the first run.
+- Runner egress to the Falcon API host and to the pre-signed download URL's host, on both platforms, or the allowlist request, recorded.
+- Token authentication with upload on the pinned CLI (`--falcon-token` with `--upload-results`); the fallback is the CLI's own credential environment variables, never a secret on the command line.
+- The spelling of the upload flag on the pinned CLI (`--upload-results` versus `--upload`).
+- The report's actual shape and the field names the cloud-rules evidence reads (`stats.rule_stats.rules_enabled`); one sanitised real report then replaces the provisional fixtures.
+- The console: where uploaded scans appear, and that both runs show under their project names (`owner/name` from GitHub, `$CI_PROJECT_PATH` from GitLab).
+- GitLab's CI Lint on a Consumer pipeline that includes the template, and the first merge-request pipeline with unprotected group variables.
+- The IaC-rule-to-IOM mapping (issue #10), which decides whether the threshold narrows in v1.1 (ADR 0005).
 
 ## Development
 
@@ -185,6 +237,8 @@ pip install -e '.[dev]'
 pytest            # offline: the suite refuses to open sockets
 mypy
 ruff check && ruff format --check
+yamllint --strict .github gitlab .gitlab-ci.yml
+shellcheck --exclude=SC1087,SC2329 scripts/*.sh   # the exclusions are the wizard library's
 ```
 
 The fake CLI is `tests/fake_fcs.py`; fixture reports are under `tests/fixtures/reports/`. CI runs the suite on Python 3.11 and 3.12 on every push and pull request.

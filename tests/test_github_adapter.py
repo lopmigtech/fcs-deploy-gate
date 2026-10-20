@@ -45,7 +45,7 @@ def test_the_owner_and_name_appear_exactly_once_across_both_files() -> None:
         f"{path.name}: {line.strip()}"
         for path in (WORKFLOW, ACTION)
         for line in path.read_text().splitlines()
-        if "lopmigtech" in line or "fcs-deploy-gate/" in line
+        if OWNER_AND_NAME.split("/")[0] in line or "fcs-deploy-gate/" in line
     ]
 
     assert mentions == [
@@ -137,7 +137,9 @@ def test_the_composite_action_does_the_plumbing_in_order() -> None:
 
 
 def test_every_external_action_is_pinned_to_a_commit_with_its_tag() -> None:
-    for path in (WORKFLOW, ACTION, CI):
+    workflows = sorted(WORKFLOW.parent.glob("*.yml"))
+    assert {WORKFLOW, CI} <= set(workflows)
+    for path in (*workflows, ACTION):
         for line in remote_uses(path):
             assert PINNED.match(line), f"{path.name}: not pinned to a commit with a tag: {line!r}"
 
