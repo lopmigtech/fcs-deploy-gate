@@ -250,7 +250,10 @@ resources by their `name` attribute, unresolved (`/aws/lambda/${local.function_n
 `fcs-gate-pilot-<unknown-sufix>` from `name_prefix`), by the Terraform label when
 there is no `name` (`pilot` for a function with `function_name`), and `n/a` for an
 account-level rule. Attributes are read as written: `tags = local.tags` still raised
-"Resource Not Using Tags" on every resource, and a literal map did not (same scans). The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
+"Resource Not Using Tags" on every resource, and a literal map did not (same scans).
+"IAM Access Analyzer Not Enabled" (resource `n/a`) was raised on two of four scans of
+the same module and not on the other two, with no change in the module that explains
+it; a Consumer's Exclusion for it is then reported stale on the scans that lack it. The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
 written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
 comments). Secrets in thresholds: unverified (inferred not
 countable). Error-vs-findings by code alone: unverified beyond {0, 40}.

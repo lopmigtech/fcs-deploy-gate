@@ -23,9 +23,11 @@ tracing were added to it:
 | informational | Resource Not Using Tags (three resources) | `iac/9bf272d6-518a-403d-b9cc-bd2f06d296af` |
 
 The retention Finding is informational, so the pipeline sets the Blocking threshold to
-include informational. Tags and tracing are in the module now; the KMS and Access
-Analyzer Findings remain for the Exclusions act, because a customer-managed key and an
-account-level analyzer are outside what the pilot is about.
+include informational. With literal tags and tracing in the module, a scan raises two
+Findings, both on the log group: KMS and retention. The KMS one is for the Exclusions
+act, because a customer-managed key is outside what the pilot is about. "IAM Access
+Analyzer Not Enabled" appeared on two of four scans of the same module and not on the
+others; if it shows in yours, exclude it the same way.
 
 ## The four acts
 
@@ -44,12 +46,10 @@ account-level analyzer are outside what the pilot is about.
        reason: Log group encryption with a customer-managed key is outside the retention pilot.
        expires: 2026-11-30
        approved_by: <security reviewer>
-     - rule: iac/d5900282-4330-48df-b93f-1d76f44f33a2
-       file: main.tf
-       reason: IAM Access Analyzer is enabled per account, not in this module.
-       expires: 2026-11-30
-       approved_by: <security reviewer>
    ```
+   If the Access Analyzer Finding is in your summary, add a second entry with rule
+   `iac/d5900282-4330-48df-b93f-1d76f44f33a2`, file `main.tf`, and the reason that the
+   analyzer is enabled per account, not in this module.
 4. **The fix.** Add `retention_in_days = 30` to the log group and push. The Verdict is
    clear, the apply runs, and the IOM closes on the next assessment.
 
