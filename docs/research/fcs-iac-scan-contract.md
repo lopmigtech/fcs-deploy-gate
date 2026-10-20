@@ -249,7 +249,8 @@ Code severity-band reading and not IntelliJ's "auth error". The same report name
 resources by their `name` attribute, unresolved (`/aws/lambda/${local.function_name}`,
 `fcs-gate-pilot-<unknown-sufix>` from `name_prefix`), by the Terraform label when
 there is no `name` (`pilot` for a function with `function_name`), and `n/a` for an
-account-level rule. The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
+account-level rule. Attributes are read as written: `tags = local.tags` still raised
+"Resource Not Using Tags" on every resource, and a literal map did not (same scans). The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
 written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
 comments). Secrets in thresholds: unverified (inferred not
 countable). Error-vs-findings by code alone: unverified beyond {0, 40}.

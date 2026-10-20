@@ -28,11 +28,11 @@ data "aws_partition" "current" {}
 
 locals {
   function_name = "fcs-gate-pilot"
-  tags = {
-    Project = "fcs-deploy-gate-pilot"
-    Owner   = "security"
-  }
 }
+
+# Tags are literal on each resource: the scanner reads attributes as written and does
+# not follow a local or variable, so `tags = local.tags` still raises "Resource Not
+# Using Tags" (observed on the first live scans).
 
 data "archive_file" "handler" {
   type        = "zip"
@@ -56,7 +56,10 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "pilot" {
   name_prefix        = "fcs-gate-pilot-"
   assume_role_policy = data.aws_iam_policy_document.assume.json
-  tags               = local.tags
+  tags = {
+    Project = "fcs-deploy-gate-pilot"
+    Owner   = "security"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "logs" {
@@ -72,7 +75,10 @@ resource "aws_iam_role_policy_attachment" "logs" {
 # demo, since a customer-managed key is outside what this pilot is about.
 resource "aws_cloudwatch_log_group" "pilot" {
   name = "/aws/lambda/${local.function_name}"
-  tags = local.tags
+  tags = {
+    Project = "fcs-deploy-gate-pilot"
+    Owner   = "security"
+  }
 }
 
 resource "aws_lambda_function" "pilot" {
@@ -82,7 +88,10 @@ resource "aws_lambda_function" "pilot" {
   handler          = "handler.handler"
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
-  tags             = local.tags
+  tags = {
+    Project = "fcs-deploy-gate-pilot"
+    Owner   = "security"
+  }
 
   tracing_config {
     mode = "Active"
