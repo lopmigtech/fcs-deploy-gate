@@ -65,6 +65,8 @@ def main() -> int:
         print("Fetching custom rules from Falcon Cloud")
     if os.environ.get("FAKE_FCS_ECHO_ARGV") == "1":
         print("Error: invalid arguments: " + " ".join(argv), file=sys.stderr)
+    if os.environ.get("FAKE_FCS_STDERR"):
+        sys.stderr.write(os.environ["FAKE_FCS_STDERR"])  # may carry \r progress updates
 
     exit_codes = os.environ.get(prefix + "EXIT_CODES")
     if exit_codes:

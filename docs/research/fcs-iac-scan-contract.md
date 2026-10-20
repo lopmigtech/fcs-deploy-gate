@@ -241,8 +241,13 @@ it across versions.
 
 Status: default `--fail-on` all-ones: confirmed (T1). `>=`: inferred. `0` =
 clean and `40` = thresholds tripped: confirmed by three independent CrowdStrike
-sources. Meaning of 1, 2, 10, 20, 30, 50, 201-207: unverified (conflicting
-CrowdStrike comments). Secrets in thresholds: unverified (inferred not
+sources. `20`: observed 2026-10-20 on the first live scan (CLI 4.2.3, pinned,
+us-gov-1, a Terraform directory with one Lambda function, `--fail-on` all-ones):
+the scan reached 100%, wrote its JSON report and exited 20, which fits the VS Code
+severity-band reading (highest matched Severity medium) and not IntelliJ's "auth
+error". The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
+written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
+comments). Secrets in thresholds: unverified (inferred not
 countable). Error-vs-findings by code alone: unverified beyond {0, 40}.
 
 ## 3. SARIF and GitHub code scanning

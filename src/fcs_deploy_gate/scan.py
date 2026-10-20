@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -9,9 +10,13 @@ from pathlib import Path
 
 REPORT_FILENAME = "fcs-report.json"
 BASELINE_REPORT_FILENAME = "fcs-report-baseline.json"
-# The only exit codes every CrowdStrike source agrees mean "scan completed"
-# (docs/research/fcs-iac-scan-contract.md, section 2).
-RESULT_EXIT_CODES: frozenset[int] = frozenset({0, 40})
+# Exit codes that mean "scan completed": 0 (nothing tripped --fail-on) and the 10 to 40
+# band keyed to the highest Severity that did. Every CrowdStrike source agrees on 0 and
+# 40; the band was confirmed on the first live scan, CLI 4.2.3 exiting 20 with a written
+# report (docs/research/fcs-iac-scan-contract.md, section 2). A report must still be
+# written and parse: a band code without one is a scan error, as is any other code.
+RESULT_EXIT_CODES: frozenset[int] = frozenset({0, 10, 20, 30, 40})
+PROGRESS_PREFIX = "Scan progress:"
 SCAN_TIMEOUT_SECONDS = 300
 FAIL_ON_EVERYTHING = "critical=1,high=1,medium=1,informational=1"
 
@@ -34,16 +39,19 @@ class ScanAttempt:
 
     @property
     def completed(self) -> bool:
-        return self.exit_code in RESULT_EXIT_CODES
+        return self.exit_code in RESULT_EXIT_CODES and self.report_path.is_file()
 
     def failure_message(self) -> str:
-        wrote = "wrote no report" if not self.report_path.is_file() else "wrote a report"
+        wrote = "wrote a report" if self.report_path.is_file() else "wrote no report"
         message = (
-            f"the fcs CLI exited with code {self.exit_code} and {wrote}; "
-            f"only exit codes {' and '.join(map(str, sorted(RESULT_EXIT_CODES)))} "
-            "count as a completed scan"
+            f"the fcs CLI exited with code {self.exit_code} and {wrote}; a scan is completed "
+            f"only when the CLI exits {', '.join(map(str, sorted(RESULT_EXIT_CODES)))} "
+            "and writes its report"
         )
-        tail = self.stderr.strip().splitlines()[-3:]
+        # The CLI redraws its progress bar with carriage returns; those updates are one
+        # long "line" that says nothing about the failure, so they are dropped.
+        lines = [line.strip() for line in re.split(r"[\r\n]+", self.stderr)]
+        tail = [line for line in lines if line and not line.startswith(PROGRESS_PREFIX)][-3:]
         if tail:
             message += ". CLI stderr: " + " | ".join(line.strip() for line in tail)
         return self.redacted(message)
