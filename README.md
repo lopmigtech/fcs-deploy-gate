@@ -4,6 +4,44 @@ A pre-apply Gate that runs the CrowdStrike Falcon Cloud Security CLI (`fcs`) aga
 
 Vocabulary is defined in `GLOSSARY.md`; decisions with lasting consequences are in `docs/adr/`. Agent-facing conventions live in `AGENTS.md` and `docs/agents/`.
 
+## GitHub quick start
+
+Add one job to the deploy workflow and make the apply job depend on it. The Gate runs in parallel with `plan`, so it adds nothing to the critical path.
+
+```yaml
+jobs:
+  gate:
+    uses: lopmigtech/fcs-deploy-gate/.github/workflows/gate.yml@v0.1.0
+    with:
+      path: infra/prod
+      region: us-gov-1
+      scope: whole-tree          # or change-aware
+      mode: enforcing            # or advisory while burning down a backlog
+    secrets:
+      falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+      falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+
+  apply:
+    needs: [plan, gate]
+    ...
+```
+
+Run it on `pull_request` (the Enforcing block prevents the merge) and on the push that deploys (the hard stop). Pin the tag: tags are immutable semver and there is no moving major tag.
+
+| Input | Required | Default | Meaning |
+|---|---|---|---|
+| `path` | yes | | Terraform directory to scan, relative to the repository root |
+| `region` | yes | | Falcon region: `us-1`, `us-2`, `eu-1`, `us-gov-1`, `us-gov-2` |
+| `scope` | no | `whole-tree` | `whole-tree` or `change-aware` |
+| `baseline-ref` | no | event default | Change-aware only: an explicit Baseline ref; otherwise the pull request base, or the push's previous commit |
+| `blocking-threshold` | no | `critical,high,medium` | Severities that block; `informational` may be added, nothing removed |
+| `mode` | no | `enforcing` | `enforcing` or `advisory` |
+| `project-name` | no | the repository name | Project name for the console upload |
+
+Secrets `falcon-client-id` and `falcon-client-secret` are the CI client (scopes below), held as organisation secrets scoped to Consumer repositories and passed explicitly. Outputs `verdict` (`clear` or `blocked`) and `blocking-count` are available to downstream jobs; the summary is in the job summary; `verdict.json`, `summary.md` and the raw reports are the `fcs-deploy-gate` artifact.
+
+The reusable workflow is one job with a fifteen-minute timeout and read-only contents permission; its single step calls the composite action in this repository, which checks out the change, installs the Gate from its own checkout, resolves the Baseline through the core, checks the Baseline out into a worktree outside the workspace when the Scope is change-aware, runs the core with the work directory under the runner's temporary directory, and uploads the artifacts even when the run fails. The Consumer organisation must allow this repository's workflows and actions to be used by other repositories (repository settings, Actions, Access: "Accessible from repositories in the organization").
+
 ## How the Gate decides
 
 The core is complete through the run entry point: both Scopes, Exclusions, and the real CLI path (token, pinned download, retries). The suite proves it offline with a fake Falcon API and a fake CLI; the first live run happens in the work environment.

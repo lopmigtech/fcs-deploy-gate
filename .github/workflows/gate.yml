@@ -1,0 +1,79 @@
+# The GitHub adapter: a thin reusable workflow (ADR 0004). A Consumer calls it at a tag
+# from its deploy workflow and makes the apply job depend on it. All the work happens in
+# the composite action below, the single place this repository's owner and name appear.
+name: fcs-deploy-gate
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Terraform directory to scan, relative to the repository root.
+        required: true
+        type: string
+      scope:
+        description: whole-tree (every Finding) or change-aware (only Findings the change introduces).
+        required: false
+        type: string
+        default: whole-tree
+      baseline-ref:
+        description: Change-aware only. The Baseline ref; defaults to the pull request base or the push's previous commit.
+        required: false
+        type: string
+        default: ""
+      blocking-threshold:
+        description: Severities that block. Must include critical, high and medium; informational may be added.
+        required: false
+        type: string
+        default: critical,high,medium
+      mode:
+        description: enforcing (a blocked Verdict fails the job) or advisory (reported, job passes).
+        required: false
+        type: string
+        default: enforcing
+      region:
+        description: "Falcon region: us-1, us-2, eu-1, us-gov-1 or us-gov-2."
+        required: true
+        type: string
+      project-name:
+        description: Project name for the console upload. Defaults to the repository name.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      falcon-client-id:
+        description: Falcon API client id (Cloud Security Tools Download READ; Infrastructure as Code READ and WRITE).
+        required: true
+      falcon-client-secret:
+        description: Falcon API client secret.
+        required: true
+    outputs:
+      verdict:
+        description: clear or blocked.
+        value: ${{ jobs.gate.outputs.verdict }}
+      blocking-count:
+        description: Number of Blocking findings.
+        value: ${{ jobs.gate.outputs.blocking-count }}
+
+jobs:
+  gate:
+    name: Gate (${{ inputs.path }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
+      blocking-count: ${{ steps.gate.outputs.blocking-count }}
+    steps:
+      - id: gate
+        uses: lopmigtech/fcs-deploy-gate/.github/actions/gate@v0.1.0
+        with:
+          path: ${{ inputs.path }}
+          scope: ${{ inputs.scope }}
+          baseline-ref: ${{ inputs.baseline-ref }}
+          blocking-threshold: ${{ inputs.blocking-threshold }}
+          mode: ${{ inputs.mode }}
+          region: ${{ inputs.region }}
+          project-name: ${{ inputs.project-name }}
+          falcon-client-id: ${{ secrets.falcon-client-id }}
+          falcon-client-secret: ${{ secrets.falcon-client-secret }}

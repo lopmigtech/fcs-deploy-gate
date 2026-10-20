@@ -258,7 +258,12 @@ def _run_config(namespace: argparse.Namespace) -> Config:
         if not fcs_binary.is_file():
             raise ConfigurationError(f"--fcs-binary {namespace.fcs_binary!r} is not a file")
 
-    if namespace.scope == "change-aware" and namespace.baseline_dir and not namespace.baseline_ref:
+    if (
+        namespace.scope == "change-aware"
+        and namespace.baseline_dir
+        and not namespace.baseline_ref
+        and not namespace.baseline_error
+    ):
         raise ConfigurationError(
             "--baseline-dir needs --baseline-ref so the Verdict records which Baseline was used"
         )

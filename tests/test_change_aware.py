@@ -278,3 +278,24 @@ def test_a_baseline_directory_without_a_ref_is_a_configuration_error(gate: GateH
     assert result.exit_code == 2
     assert "--baseline-ref" in result.stderr
     assert result.invocations == []
+
+
+def test_a_baseline_error_wins_over_the_directory_and_ref_inputs(gate: GateHarness) -> None:
+    """An adapter passes every Baseline input unconditionally; when the resolver gave an
+    error, the empty ref and the never-created directory must not become exit 2."""
+    result = gate(
+        "--scope",
+        "change-aware",
+        "--baseline-dir",
+        str(gate.tmp_path / "never-created"),
+        "--baseline-ref",
+        "",
+        "--baseline-error",
+        "no usable Baseline: the previous commit is all zeros",
+        today=TODAY,
+    )
+
+    assert result.exit_code == 1
+    assert result.verdict["verdict"] == "blocked"
+    assert "all zeros" in result.verdict["error"]
+    assert result.invocations == []
