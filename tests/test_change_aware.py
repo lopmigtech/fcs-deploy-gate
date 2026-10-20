@@ -56,7 +56,7 @@ def test_change_aware_runs_two_scans_from_their_own_directories(gate: GateHarnes
     result = gate(baseline_report="baseline.json", today=TODAY)
 
     baseline, change = result.invocations
-    assert baseline["cwd"] == str(gate.baseline_dir)
+    assert baseline["cwd"] == str(gate.baseline_dir / "infra")  # the scanned path's counterpart
     assert change["cwd"] == str(gate.scan_root)
     assert "--upload-results" not in baseline["argv"]
     assert "--upload-results" in change["argv"]
@@ -133,8 +133,7 @@ def test_a_resource_moved_to_another_file_is_new(gate: GateHarness, tmp_path: Pa
 def test_baseline_paths_normalise_against_the_baseline_directory(
     gate: GateHarness, tmp_path: Path
 ) -> None:
-    absolute = str(gate.baseline_dir / "logging.tf")
-    gate.baseline_dir.mkdir(exist_ok=True)
+    absolute = str(gate.baseline_dir / "infra" / "logging.tf")
 
     result = gate(baseline_report=baseline_variant(tmp_path, "abs", file=absolute), today=TODAY)
 
@@ -299,3 +298,42 @@ def test_a_baseline_error_wins_over_the_directory_and_ref_inputs(gate: GateHarne
     assert result.verdict["verdict"] == "blocked"
     assert "all zeros" in result.verdict["error"]
     assert result.invocations == []
+
+
+def test_the_baseline_is_scanned_at_the_same_relative_path_as_the_change(
+    gate: GateHarness,
+) -> None:
+    """The adapter checks the whole repository out at the Baseline ref; the core scans the
+    scanned path's counterpart inside it, so Finding paths share one root (ADR 0002)."""
+    result = gate(baseline_report="baseline.json", today=TODAY)
+
+    baseline, change = result.invocations
+    assert baseline["cwd"] == str(gate.baseline_dir / "infra")
+    assert change["cwd"] == str(gate.scan_root)
+
+
+def test_a_path_absent_at_the_baseline_is_an_empty_baseline_not_an_error(
+    gate: GateHarness,
+) -> None:
+    result = gate(baseline_report="baseline.json", baseline_has_path=False, today=TODAY)
+
+    assert result.exit_code == 1
+    assert result.verdict["error"] is None
+    assert result.verdict["baseline_path_present"] is False
+    assert result.verdict["new_findings"] == result.verdict["total_findings"] == 7
+    assert len(result.invocations) == 1  # nothing to scan at the Baseline
+    assert "did not exist at the Baseline" in result.summary
+
+
+def test_a_baseline_checkout_that_is_not_a_repository_root_is_used_as_given(
+    gate: GateHarness, tmp_path: Path
+) -> None:
+    """When the scanned path is its own repository root, the relative path is '.' and the
+    Baseline directory is scanned as given."""
+    (gate.scan_root / ".git").mkdir()  # the scanned directory is the repository root
+
+    result = gate(baseline_report="baseline.json", today=TODAY)
+
+    baseline, _ = result.invocations
+    assert baseline["cwd"] == str(gate.baseline_dir)
+    assert result.verdict["baseline_path_present"] is True

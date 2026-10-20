@@ -1,6 +1,6 @@
 # The composite action behind the reusable workflow: checks out the change, installs the
 # Gate from this action's own checkout, resolves and checks out the Baseline when the
-# Scope is change-aware, runs the core, and publishes the results. No gate logic lives
+# Scope is change-aware, runs the core, and publishes the artifacts. No gate logic lives
 # here (ADR 0004): every decision, including a Baseline error, is the core's.
 name: fcs-deploy-gate
 description: Scan Terraform source with the CrowdStrike fcs CLI and decide whether the Deployment may proceed.
@@ -38,10 +38,6 @@ inputs:
   falcon-client-secret:
     description: Falcon API client secret.
     required: true
-  python-version:
-    description: Python version to run the Gate with.
-    required: false
-    default: "3.12"
 
 outputs:
   verdict:
@@ -54,13 +50,22 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: event
+      if: github.event_name == 'pull_request_target'
+      shell: bash
+      # On pull_request_target the checkout is the base branch, so the Gate would judge the
+      # wrong code. Run it on pull_request instead.
+      run: |
+        echo "::error::fcs-deploy-gate must run on pull_request, not pull_request_target: that event checks out the base branch, not the change."
+        exit 1
+
     - id: checkout
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - id: python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
-        python-version: ${{ inputs.python-version }}
+        python-version: "3.12"
 
     - id: install
       shell: bash
@@ -73,7 +78,7 @@ runs:
       if: inputs.scope == 'change-aware'
       shell: bash
       env:
-        PIPELINE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'merge-request' || 'branch' }}
+        PIPELINE: ${{ github.event_name == 'pull_request' && 'merge-request' || 'branch' }}
         EXPLICIT_REF: ${{ inputs.baseline-ref }}
         MERGE_BASE: ${{ github.event.pull_request.base.sha }}
         PREVIOUS_COMMIT: ${{ github.event.before }}
@@ -83,14 +88,21 @@ runs:
           --merge-base "$MERGE_BASE" --previous-commit "$PREVIOUS_COMMIT" | tee -a "$GITHUB_OUTPUT"
 
     - id: checkout-baseline
-      if: inputs.scope == 'change-aware' && steps.resolve-baseline.outputs.ref != ''
+      if: steps.resolve-baseline.outputs.ref != ''
       shell: bash
       env:
         BASELINE_REF: ${{ steps.resolve-baseline.outputs.ref }}
-      # A worktree outside the workspace, so the Baseline never sits inside the scanned tree.
+      # The whole repository at the Baseline ref, as a worktree outside the workspace so it
+      # never sits inside the scanned tree; the core scans the scanned path's counterpart in
+      # it. A ref that cannot be fetched (force-pushed away) becomes a Baseline error for
+      # the core to turn into a blocked Verdict, not a mute job failure.
       run: |
-        git fetch --no-tags --depth=1 origin "$BASELINE_REF"
-        git worktree add --detach "$RUNNER_TEMP/fcs-gate-baseline" FETCH_HEAD
+        if git fetch --no-tags --depth=1 origin "$BASELINE_REF" \
+          && git worktree add --detach "$RUNNER_TEMP/fcs-gate-baseline" FETCH_HEAD; then
+          echo "checked_out=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "error=the Baseline ref $BASELINE_REF could not be checked out (not reachable from the remote; a force push may have removed it); pass an explicit Baseline ref" >> "$GITHUB_OUTPUT"
+        fi
 
     - id: gate
       shell: bash
@@ -104,12 +116,14 @@ runs:
         REGION: ${{ inputs.region }}
         PROJECT_NAME: ${{ inputs.project-name || github.repository }}
         BASELINE_REF: ${{ steps.resolve-baseline.outputs.ref }}
-        BASELINE_ERROR: ${{ steps.resolve-baseline.outputs.error }}
+        BASELINE_ERROR: ${{ steps.resolve-baseline.outputs.error || steps.checkout-baseline.outputs.error }}
       # The Baseline inputs are always passed; the core ignores them in whole-tree Scope and
       # turns a Baseline error into a blocked Verdict. The core writes verdict and
       # blocking_count to GITHUB_OUTPUT and the summary to GITHUB_STEP_SUMMARY, and exits 1
-      # on a blocked Verdict only in enforcing mode.
+      # on a blocked Verdict only in enforcing mode. The artifact name is written first so
+      # that one Consumer can call the Gate once per Terraform root in a single run.
       run: |
+        echo "artifact_name=fcs-deploy-gate-$(printf '%s' "$SCAN_PATH" | tr -c 'A-Za-z0-9._-' '-')" >> "$GITHUB_OUTPUT"
         fcs-deploy-gate run --path "$SCAN_PATH" --region "$REGION" --scope "$SCOPE" --mode "$MODE" \
           --blocking-threshold "$BLOCKING_THRESHOLD" --project-name "$PROJECT_NAME" \
           --work-dir "$RUNNER_TEMP/fcs-gate" \
@@ -120,6 +134,6 @@ runs:
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: fcs-deploy-gate
+        name: ${{ steps.gate.outputs.artifact_name || 'fcs-deploy-gate' }}
         path: ${{ runner.temp }}/fcs-gate/
         if-no-files-found: ignore

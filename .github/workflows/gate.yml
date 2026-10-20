@@ -1,6 +1,7 @@
 # The GitHub adapter: a thin reusable workflow (ADR 0004). A Consumer calls it at a tag
 # from its deploy workflow and makes the apply job depend on it. All the work happens in
-# the composite action below, the single place this repository's owner and name appear.
+# the composite action; the `uses:` line below is the single place this repository's
+# owner and name appear, and a test holds its version equal to the package's.
 name: fcs-deploy-gate
 
 on:

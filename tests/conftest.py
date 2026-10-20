@@ -64,7 +64,8 @@ class GateHarness:
 
     @property
     def baseline_dir(self) -> Path:
-        """Where the harness checks out the Baseline, as an adapter would."""
+        """Where the harness checks the Consumer repository out at the Baseline ref, as an
+        adapter would."""
         return self.tmp_path / "baseline"
 
     def real(
@@ -112,6 +113,7 @@ class GateHarness:
         baseline_report: str | Path | None = None,
         baseline_ref: str | None = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
         baseline_exit_code: int = 40,
+        baseline_has_path: bool = True,
         transport: Transport | None = None,
         clock: Clock | None = None,
         pin: CliPin | None = None,
@@ -138,8 +140,13 @@ class GateHarness:
             run_env["FAKE_FCS_EXIT_CODE"] = str(exit_code)
         scope_args: list[str] = []
         if baseline_report is not None:
+            # The Baseline is the whole Consumer repository at the Baseline ref, as an
+            # adapter checks it out; the scanned path's counterpart lives inside it.
             self.baseline_dir.mkdir(exist_ok=True)
-            (self.baseline_dir / "logging.tf").write_text('resource "aws_s3_bucket" "logs" {}\n')
+            if baseline_has_path:
+                counterpart = self.baseline_dir / self.scan_root.relative_to(self.repo_root)
+                counterpart.mkdir(parents=True, exist_ok=True)
+                (counterpart / "logging.tf").write_text('resource "aws_s3_bucket" "logs" {}\n')
             scope_args = ["--scope", "change-aware", "--baseline-dir", str(self.baseline_dir)]
             if baseline_ref is not None:
                 scope_args += ["--baseline-ref", baseline_ref]

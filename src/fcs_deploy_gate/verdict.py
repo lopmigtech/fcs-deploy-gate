@@ -28,6 +28,7 @@ class Verdict:
     unscanned_files: int = 0
     block_on_unscanned_files: bool = True
     baseline_ref: str | None = None
+    baseline_path_present: bool | None = None
     total_findings: int = 0
     new_findings: int = 0
     cloud_rules_evidence: CloudRulesEvidence | None = None
@@ -67,6 +68,7 @@ def decide(
     today: date,
     baseline: Iterable[Finding] | None = None,
     baseline_ref: str | None = None,
+    baseline_path_present: bool | None = None,
     unscanned_files: int = 0,
     block_on_unscanned_files: bool = True,
     cloud_rules_evidence: CloudRulesEvidence | None = None,
@@ -94,6 +96,7 @@ def decide(
         unscanned_files=unscanned_files,
         block_on_unscanned_files=block_on_unscanned_files,
         baseline_ref=baseline_ref,
+        baseline_path_present=baseline_path_present,
         total_findings=len(ordered),
         new_findings=len(considered),
         cloud_rules_evidence=cloud_rules_evidence,
@@ -107,6 +110,7 @@ def verdict_document(verdict: Verdict, config: Config) -> dict[str, Any]:
         "scope": config.scope,
         "path": config.scan_path_as_given,
         "baseline_ref": verdict.baseline_ref,
+        "baseline_path_present": verdict.baseline_path_present,
         "total_findings": verdict.total_findings,
         "new_findings": verdict.new_findings,
         "blocking_threshold": config.blocking_threshold_ordered,

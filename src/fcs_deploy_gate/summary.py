@@ -79,7 +79,10 @@ def render_summary(verdict: Verdict, config: Config) -> str:
         f"| Blocking threshold | {threshold} |",
     ]
     if config.change_aware:
-        parts += [f"| Baseline | `{verdict.baseline_ref or 'unresolved'}` |"]
+        baseline = f"`{verdict.baseline_ref or 'unresolved'}`"
+        if verdict.baseline_path_present is False:
+            baseline += " (the scanned path did not exist at the Baseline; every Finding is new)"
+        parts += [f"| Baseline | {baseline} |"]
         if verdict.error is None:
             parts += [
                 f"| Findings | {verdict.new_findings} new of {verdict.total_findings} total |"

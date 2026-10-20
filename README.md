@@ -36,9 +36,11 @@ Run it on `pull_request` (the Enforcing block prevents the merge) and on the pus
 | `baseline-ref` | no | event default | Change-aware only: an explicit Baseline ref; otherwise the pull request base, or the push's previous commit |
 | `blocking-threshold` | no | `critical,high,medium` | Severities that block; `informational` may be added, nothing removed |
 | `mode` | no | `enforcing` | `enforcing` or `advisory` |
-| `project-name` | no | the repository name | Project name for the console upload |
+| `project-name` | no | `owner/name` | Project name for the console upload (the form CrowdStrike's own action recommends) |
 
-Secrets `falcon-client-id` and `falcon-client-secret` are the CI client (scopes below), held as organisation secrets scoped to Consumer repositories and passed explicitly. Outputs `verdict` (`clear` or `blocked`) and `blocking-count` are available to downstream jobs; the summary is in the job summary; `verdict.json`, `summary.md` and the raw reports are the `fcs-deploy-gate` artifact.
+Secrets `falcon-client-id` and `falcon-client-secret` are the CI client (scopes below), held as organisation secrets scoped to Consumer repositories and passed explicitly. Outputs `verdict` (`clear` or `blocked`) and `blocking-count` are available to downstream jobs; the summary is in the job summary; `verdict.json`, `summary.md` and the raw reports are the `fcs-deploy-gate-<path>` artifact, one per scanned root. Run the Gate on `pull_request`, never `pull_request_target`: that event checks out the base branch, and the action refuses it.
+
+In Change-aware Scope on GitHub the Baseline is the pull request's base commit (the checkout is the merge commit, so that is the change's merge base in effect) or the push's previous commit, unless `baseline-ref` names one. A Baseline ref that cannot be fetched, such as one a force push removed, is a blocked Verdict with a message, not a silent job failure.
 
 The reusable workflow is one job with a fifteen-minute timeout and read-only contents permission; its single step calls the composite action in this repository, which checks out the change, installs the Gate from its own checkout, resolves the Baseline through the core, checks the Baseline out into a worktree outside the workspace when the Scope is change-aware, runs the core with the work directory under the runner's temporary directory, and uploads the artifacts even when the run fails. The Consumer organisation must allow this repository's workflows and actions to be used by other repositories (repository settings, Actions, Access: "Accessible from repositories in the organization").
 
@@ -90,7 +92,7 @@ It prints `version=`, `sha256=`, `file_name=` and `size=` for the published rele
 
 ## Baseline
 
-Change-aware Scope needs the Baseline checked out in a second directory, which the adapter does and passes as `--baseline-dir`, with the ref as `--baseline-ref`. The ref comes from one place:
+Change-aware Scope needs the Consumer repository checked out at the Baseline ref in a second directory, which the adapter does and passes as `--baseline-dir`, with the ref as `--baseline-ref`. The core scans the scanned path's counterpart inside it, so Finding paths from both scans share one root; a path that did not exist at the Baseline is a new root, and every Finding in it is new. The ref comes from one place:
 
 ```sh
 fcs-deploy-gate resolve-baseline --pipeline merge-request|branch \

@@ -11,11 +11,15 @@ from typing import Any
 
 import yaml
 
+from fcs_deploy_gate.config import DEFAULT_BLOCKING_THRESHOLD, ordered_severities
+
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO / ".github" / "workflows" / "gate.yml"
 ACTION = REPO / ".github" / "actions" / "gate" / "action.yml"
 CI = REPO / ".github" / "workflows" / "ci.yml"
+README = REPO / "README.md"
 OWNER_AND_NAME = "lopmigtech/fcs-deploy-gate"
+DEFAULT_THRESHOLD = ",".join(ordered_severities(DEFAULT_BLOCKING_THRESHOLD))
 PINNED = re.compile(r"^\s*-?\s*uses:\s*(?P<ref>[^@\s]+)@(?P<sha>[0-9a-f]{40})\s+#\s*v\d[\w.-]*\s*$")
 
 
@@ -31,11 +35,20 @@ def load(path: Path) -> dict[Any, Any]:
 
 
 def remote_uses(path: Path) -> list[str]:
+    """Every `uses:` of an action outside this repository (its own action is exempt)."""
     return [
         line
         for line in path.read_text().splitlines()
-        if re.match(r"^\s*-?\s*uses:", line) and "./" not in line.split("uses:")[1]
+        if re.match(r"^\s*-?\s*uses:", line)
+        and "./" not in line.split("uses:")[1]
+        and OWNER_AND_NAME not in line
     ]
+
+
+def step(action: dict[str, Any], step_id: str) -> dict[str, Any]:
+    [found] = [s for s in action["runs"]["steps"] if s.get("id") == step_id]
+    assert isinstance(found, dict)
+    return found
 
 
 def test_the_action_reference_carries_the_package_version() -> None:
@@ -76,7 +89,7 @@ def test_the_reusable_workflow_is_thin() -> None:
     assert call["inputs"]["region"]["required"] is True
     assert call["inputs"]["scope"]["default"] == "whole-tree"
     assert call["inputs"]["mode"]["default"] == "enforcing"
-    assert call["inputs"]["blocking-threshold"]["default"] == "critical,high,medium"
+    assert call["inputs"]["blocking-threshold"]["default"] == DEFAULT_THRESHOLD
     assert set(call["secrets"]) == {"falcon-client-id", "falcon-client-secret"}
     assert all(secret["required"] is True for secret in call["secrets"].values())
     assert set(call["outputs"]) == {"verdict", "blocking-count"}
@@ -93,20 +106,16 @@ def test_the_composite_action_does_the_plumbing_in_order() -> None:
     steps = action["runs"]["steps"]
     ids = [step.get("id") for step in steps]
 
+    workflow_inputs = set(load(WORKFLOW)[True]["workflow_call"]["inputs"])
     assert action["runs"]["using"] == "composite"
-    assert set(action["inputs"]) >= {
-        "path",
-        "scope",
-        "baseline-ref",
-        "blocking-threshold",
-        "mode",
-        "region",
-        "project-name",
-        "falcon-client-id",
-        "falcon-client-secret",
-    }
+    assert set(action["inputs"]) == workflow_inputs | {"falcon-client-id", "falcon-client-secret"}
+    for name in workflow_inputs:
+        assert action["inputs"][name].get("default") == (
+            load(WORKFLOW)[True]["workflow_call"]["inputs"][name].get("default")
+        ), name
     assert set(action["outputs"]) == {"verdict", "blocking-count"}
     assert ids == [
+        "event",
         "checkout",
         "python",
         "install",
@@ -116,45 +125,53 @@ def test_the_composite_action_does_the_plumbing_in_order() -> None:
         "artifacts",
     ]
 
-    by_id = {step["id"]: step for step in steps}
-    assert "actions/checkout@" in by_id["checkout"]["uses"]
-    assert "actions/setup-python@" in by_id["python"]["uses"]
-    assert "pip install" in by_id["install"]["run"]
-    assert "github.action_path" in by_id["install"]["run"]
-    assert "change-aware" in by_id["resolve-baseline"]["if"]
-    assert "resolve-baseline" in by_id["resolve-baseline"]["run"]
-    assert "change-aware" in by_id["checkout-baseline"]["if"]
-    assert "outputs.ref" in by_id["checkout-baseline"]["if"]
-    assert "RUNNER_TEMP" in by_id["checkout-baseline"]["run"]
-    assert "always()" in by_id["artifacts"]["if"]
-    assert "actions/upload-artifact@" in by_id["artifacts"]["uses"]
+    assert "pull_request_target" in step(action, "event")["if"]
+    assert "exit 1" in step(action, "event")["run"]
+    assert "actions/checkout@" in step(action, "checkout")["uses"]
+    assert "actions/setup-python@" in step(action, "python")["uses"]
+    assert "pip install" in step(action, "install")["run"]
+    assert "github.action_path" in step(action, "install")["run"]
+    assert "change-aware" in step(action, "resolve-baseline")["if"]
+    assert "resolve-baseline" in step(action, "resolve-baseline")["run"]
+    assert "pull_request_target" not in str(step(action, "resolve-baseline")["env"])
+    assert step(action, "checkout-baseline")["if"] == "steps.resolve-baseline.outputs.ref != ''"
+    assert "RUNNER_TEMP" in step(action, "checkout-baseline")["run"]
+    assert "error=" in step(action, "checkout-baseline")["run"]  # a failed fetch is a Verdict
+    assert "always()" in step(action, "artifacts")["if"]
+    assert "actions/upload-artifact@" in step(action, "artifacts")["uses"]
+    assert "artifact_name" in step(action, "artifacts")["with"]["name"]  # one per scanned root
 
-    gate = by_id["gate"]["run"]
-    assert "fcs-deploy-gate run" in gate
-    assert '--work-dir "$RUNNER_TEMP' in gate
-    assert "--baseline-error" in gate and "--baseline-ref" in gate and "--baseline-dir" in gate
+    gate = step(action, "gate")
+    assert "fcs-deploy-gate run" in gate["run"]
+    assert '--work-dir "$RUNNER_TEMP' in gate["run"]
+    assert all(
+        flag in gate["run"] for flag in ("--baseline-error", "--baseline-ref", "--baseline-dir")
+    )
     assert "--fcs-binary" not in ACTION.read_text()
-    assert by_id["gate"]["env"]["FALCON_CLIENT_ID"] == "${{ inputs.falcon-client-id }}"
-    assert by_id["gate"]["env"]["FALCON_CLIENT_SECRET"] == "${{ inputs.falcon-client-secret }}"
-    assert "continue-on-error" not in by_id["gate"]  # the core's exit code decides
+    assert gate["env"]["FALCON_CLIENT_ID"] == "${{ inputs.falcon-client-id }}"
+    assert gate["env"]["FALCON_CLIENT_SECRET"] == "${{ inputs.falcon-client-secret }}"
+    assert "checkout-baseline.outputs.error" in gate["env"]["BASELINE_ERROR"]
+    assert "continue-on-error" not in gate  # the core's exit code decides
 
 
 def test_every_external_action_is_pinned_to_a_commit_with_its_tag() -> None:
-    for path in (ACTION, CI):
+    for path in (WORKFLOW, ACTION, CI):
         for line in remote_uses(path):
             assert PINNED.match(line), f"{path.name}: not pinned to a commit with a tag: {line!r}"
 
 
 def test_the_project_name_defaults_to_the_repository() -> None:
-    action = load(ACTION)
-    [gate] = [step for step in action["runs"]["steps"] if step.get("id") == "gate"]
+    gate = step(load(ACTION), "gate")
 
-    assert "github.repository" in gate["run"] or "github.repository" in str(gate.get("env"))
+    assert gate["env"]["PROJECT_NAME"] == "${{ inputs.project-name || github.repository }}"
+
+
+def test_the_readme_quick_start_pins_the_package_version() -> None:
+    references = re.findall(rf"{OWNER_AND_NAME}/[^@\s]+@v(\S+)", README.read_text())
+
+    assert references, "the README quick start should reference the reusable workflow"
+    assert set(references) == {package_version()}
 
 
 def test_ci_runs_actionlint() -> None:
-    ci = load(CI)
-
-    assert "actionlint" in ci["jobs"]
-    text = CI.read_text()
-    assert "actionlint" in text
+    assert "actionlint" in load(CI)["jobs"]

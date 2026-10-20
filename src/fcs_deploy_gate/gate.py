@@ -222,6 +222,7 @@ def _scan_and_judge(
     """Fail closed (ADR 0001): a Baseline that cannot be used, a scan that did not
     complete after its retries, or a report the Gate cannot trust, blocks."""
     baseline: list[Finding] | None = None
+    baseline_path_present: bool | None = None
     if config.change_aware:
         if config.baseline_error:
             return _blocked(config, config.baseline_error)
@@ -233,16 +234,24 @@ def _scan_and_judge(
                 f"the Baseline ref out and pass --baseline-dir, or the Consumer must "
                 f"{EXPLICIT_REF_HINT}",
             )
-        baseline_dir = config.baseline_dir
-        try:
-            baseline = with_retries(
-                "the Baseline scan",
-                lambda: _scan(config, env, tools, baseline_dir, BASELINE_REPORT_FILENAME),
-                clock,
-                (ReportError,),
-            ).findings
-        except RetriesExhausted as exc:
-            return _blocked(config, str(exc))
+        # The adapter checks the whole Consumer repository out at the Baseline ref; the
+        # scanned path's counterpart inside it is what the Baseline scan covers, so Finding
+        # paths from both scans share one root (ADR 0002). A path that did not exist at the
+        # Baseline is a new root: nothing to scan, every Finding new.
+        baseline_scan_dir = config.baseline_dir / _scan_path_within_repository(config)
+        baseline_path_present = baseline_scan_dir.is_dir()
+        if baseline_path_present:
+            try:
+                baseline = with_retries(
+                    "the Baseline scan",
+                    lambda: _scan(config, env, tools, baseline_scan_dir, BASELINE_REPORT_FILENAME),
+                    clock,
+                    (ReportError,),
+                ).findings
+            except RetriesExhausted as exc:
+                return _blocked(config, str(exc))
+        else:
+            baseline = []
 
     try:
         scanned = with_retries(
@@ -260,10 +269,20 @@ def _scan_and_judge(
         today=today,
         baseline=baseline,
         baseline_ref=_baseline_ref(config),
+        baseline_path_present=baseline_path_present,
         unscanned_files=unscanned_file_count(scanned.report),
         block_on_unscanned_files=config.block_on_unscanned_files,
         cloud_rules_evidence=scanned.evidence,
     )
+
+
+def _scan_path_within_repository(config: Config) -> Path:
+    """The scanned path relative to its repository root ('.' when it is the root, or is
+    not inside one), which is also where it lives inside a Baseline checkout."""
+    try:
+        return config.scan_path.relative_to(repository_root(config.scan_path))
+    except ValueError:
+        return Path()
 
 
 @dataclass(frozen=True)
