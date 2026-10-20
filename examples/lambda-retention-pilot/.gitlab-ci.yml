@@ -1,0 +1,70 @@
+# Pilot pipeline: the Gate in front of a Terraform apply on a self-managed GitLab.
+# plan runs in merge-request and default-branch pipelines beside the Gate's job; apply
+# runs on the default branch only, from the reviewed planfile, and needs the Gate's
+# job, so an Enforcing block stops it (Gate README, "GitLab quick start").
+#
+# Project CI/CD variables to set (masked where secret): FALCON_CLIENT_ID,
+# FALCON_CLIENT_SECRET (the CI client), and the sandbox account's credentials the way
+# your pipelines already authenticate to AWS (for example AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY). GitLab-managed Terraform state must be enabled on the
+# project (Settings, General, Visibility and project features, Infrastructure).
+
+stages: [test, deploy]
+
+include:
+  - project: security/fcs-deploy-gate  # the Gate project's path on your instance
+    ref: main                           # the pilot follows main; a release is a tag
+    file: /gitlab/fcs-deploy-gate.gitlab-ci.yml
+
+variables:
+  FCS_GATE_REF: main                    # must equal the include ref until v0.1.0 is tagged
+  FCS_GATE_PROJECT: security/fcs-deploy-gate
+  FCS_GATE_REGION: us-gov-1
+  FCS_GATE_PATH: lambda
+  FCS_GATE_MODE: advisory               # the demo's second act flips this to enforcing
+  # FCS_GATE_IMAGE: an image your runners can pull that carries python and git
+  # FCS_GATE_BLOCKING_THRESHOLD: critical,high,medium,informational  # if the retention Finding is informational
+  TF_ROOT: lambda
+  TF_STATE_NAME: pilot
+  TF_VAR_region: us-gov-west-1
+  TF_IN_AUTOMATION: "true"
+
+.terraform:
+  image:
+    name: hashicorp/terraform:1.9       # or your registry's mirror of it
+    entrypoint: [""]
+  before_script:
+    - cd "$TF_ROOT"
+    - |
+      terraform init -input=false \
+        -backend-config="address=${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}" \
+        -backend-config="lock_address=${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}/lock" \
+        -backend-config="unlock_address=${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}/lock" \
+        -backend-config="username=gitlab-ci-token" \
+        -backend-config="password=${CI_JOB_TOKEN}" \
+        -backend-config="lock_method=POST" \
+        -backend-config="unlock_method=DELETE" \
+        -backend-config="retry_wait_min=5"
+
+plan:
+  extends: .terraform
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - terraform plan -input=false -out=tfplan
+  artifacts:
+    paths:
+      - $TF_ROOT/tfplan
+      - $TF_ROOT/handler.zip
+    expire_in: 1 day
+
+apply:
+  extends: .terraform
+  stage: deploy
+  needs: [plan, fcs-deploy-gate]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - terraform apply -input=false tfplan

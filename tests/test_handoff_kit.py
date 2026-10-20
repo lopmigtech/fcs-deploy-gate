@@ -175,3 +175,33 @@ def test_the_readme_documents_release_migration_and_what_only_the_work_environme
     for item in ("gate.yml", "organisation secrets", "access policy", "job token", "image mirror"):
         assert item in migration.lower(), item
     assert section["Verified only in the work environment"].count("\n- ") >= 5
+
+
+PILOT = REPO / "examples" / "lambda-retention-pilot"
+
+
+def test_the_pilot_pipeline_includes_the_template_and_gates_the_apply() -> None:
+    pipeline = load(PILOT / ".gitlab-ci.yml")
+    [include] = pipeline["include"]
+    variables = pipeline["variables"]
+
+    assert include["file"] == "/" + TEMPLATE.relative_to(REPO).as_posix()
+    assert variables["FCS_GATE_REF"] == include["ref"]  # the clone and the include agree
+    assert variables["FCS_GATE_PROJECT"] == include["project"]
+    assert variables["FCS_GATE_PATH"] == "lambda"
+    assert variables["FCS_GATE_MODE"] == "advisory"  # the first act
+    assert "test" in pipeline["stages"]  # the template's job runs in stage test
+    assert pipeline["apply"]["stage"] in pipeline["stages"]
+    assert set(pipeline["apply"]["needs"]) == {"plan", "fcs-deploy-gate"}
+    assert "terraform apply" in "\n".join(pipeline["apply"]["script"])
+    assert "CI_JOB_TOKEN" in "\n".join(pipeline[".terraform"]["before_script"])
+
+
+def test_the_pilot_terraform_has_exactly_the_retention_gap() -> None:
+    terraform = (PILOT / "lambda" / "main.tf").read_text()
+
+    assert terraform.count('resource "aws_lambda_function"') == 1
+    assert terraform.count('resource "aws_cloudwatch_log_group"') == 1
+    assert not re.search(r"^\s*retention_in_days\s*=", terraform, re.MULTILINE)
+    assert "aws_partition" in terraform  # GovCloud ARNs are arn:aws-us-gov:
+    assert not re.search(r"AKIA[0-9A-Z]{16}|secret_key|password", terraform)

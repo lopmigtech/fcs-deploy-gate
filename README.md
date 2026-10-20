@@ -193,6 +193,7 @@ No Falcon tenant exists where the Gate is built, so everything that needs one ha
 - **The wizard**, `scripts/handoff-wizard.sh`. Run it from the repository root inside a virtualenv with the Gate installed (`pip install -e '.[dev]'`). It walks through the steps only a person can perform, in order: migrating the repository, creating the CI client and the read-only mapping client with their exact scopes, placing the organisation and group secrets, enabling the repository access policy on GitHub and the job token permissions and image mirror on GitLab, filling the checksum pin and opening its pull request, cutting the release tag, the first Advisory run on each platform, capturing the real report, and confirming the console upload. It pauses at every manual action and records what was confirmed in `.env` (gitignored, mode 0600). Client secrets are held in memory for the run and never written. Stop it with Ctrl-C and re-run; it offers the values already recorded.
 - **The insecure fixture**, `tests/fixtures/terraform/insecure-bucket/`: one public, unencrypted, unlogged, untagged S3 bucket with no credentials of any kind, for the live runs to find. Scan it freely; apply it only in the sandbox account, and destroy it afterwards. AWS encrypts every new bucket with SSE-S3 by default, so the applied bucket is encrypted at rest: expect the IaC Finding for the missing encryption configuration, but perhaps no IOM for it, which is itself a data point for the mapping.
 - **The live checks**: `.github/workflows/live-check.yml` (Actions, "Live check", "Run workflow", with the region and the mode) and this repository's own `.gitlab-ci.yml` (CI/CD, Pipelines, "Run pipeline", with `FCS_GATE_REGION`). Each scans the fixture through its adapter in Advisory mode and runs by hand only.
+- **The pilot example**, `examples/lambda-retention-pilot/`: a Consumer repository for a demo against one rule, a Lambda function whose log group has no retention. Its pipeline plans, runs the Gate and applies from the planfile; its README scripts the demo in four acts, Advisory, Enforcing, Exclusions and the fix.
 
 ## Release procedure
 
@@ -237,7 +238,7 @@ pip install -e '.[dev]'
 pytest            # offline: the suite refuses to open sockets
 mypy
 ruff check && ruff format --check
-yamllint --strict .github gitlab .gitlab-ci.yml
+yamllint --strict .github gitlab .gitlab-ci.yml examples
 shellcheck --exclude=SC1087,SC2317,SC2329 scripts/handoff-wizard.sh   # the exclusions are its library's
 ```
 

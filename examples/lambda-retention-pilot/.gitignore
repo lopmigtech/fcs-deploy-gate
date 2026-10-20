@@ -1,0 +1,6 @@
+# Terraform working files; the pipeline carries tfplan and handler.zip as artifacts.
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+handler.zip
