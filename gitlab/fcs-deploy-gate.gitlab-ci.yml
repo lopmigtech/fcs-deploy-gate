@@ -11,9 +11,13 @@
 # Instance variables (set once by the Gate maintainers): FCS_GATE_IMAGE (the mirrored
 #   Python image), FCS_GATE_PROJECT (the Gate project's path on this GitLab instance).
 # Credentials: FALCON_CLIENT_ID and FALCON_CLIENT_SECRET as masked (hidden) CI variables
-#   at group level, not protected: merge-request pipelines run on unprotected source
-#   branches and would not see protected variables. The core reads them from the
-#   environment and never passes them on.
+#   at group level. Unprotected, if the Gate is to run in merge-request pipelines: those
+#   run on unprotected source branches and would not see protected variables. That makes
+#   the Consumer group's membership the trust boundary for the CI client, which is why
+#   the client holds only the download and IaC scopes (README, "API clients"). A stricter
+#   estate keeps them protected and runs the Gate only in default-branch pipelines, giving
+#   up the merge-request block. The core reads them from the environment and never passes
+#   them on.
 
 variables:
   FCS_GATE_IMAGE: "$CI_REGISTRY/mirror/python:3.12"
