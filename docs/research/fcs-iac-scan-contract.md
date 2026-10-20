@@ -253,8 +253,11 @@ account-level rule. Attributes are read as written: `tags = local.tags` still ra
 "Resource Not Using Tags" on every resource, and a literal map did not (same scans).
 "IAM Access Analyzer Not Enabled" (resource `n/a`) was raised on two of four scans of
 the same module and not on the other two, with no change in the module that explains
-it; a Consumer's Exclusion for it is then reported stale on the scans that lack it. The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
-written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
+it; a Consumer's Exclusion for it is then reported stale on the scans that lack it.
+The upload with the token: confirmed 2026-10-20, the same scan appeared in the console's
+IaC scan view under the `--project-name` given, with the KMS and retention Findings on
+the log group as in the report. The Gate now accepts 0, 10, 20, 30 and 40 as completed
+when a report was written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
 comments). Secrets in thresholds: unverified (inferred not
 countable). Error-vs-findings by code alone: unverified beyond {0, 40}.
 
