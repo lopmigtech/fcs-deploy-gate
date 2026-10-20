@@ -5,33 +5,21 @@ commit, and the action reference at the package's own version so a release canno
 from __future__ import annotations
 
 import re
-import tomllib
 from pathlib import Path
-from typing import Any
 
-import yaml
+from tests.adapters import (
+    ACTION,
+    CI,
+    DEFAULT_THRESHOLD,
+    OWNER_AND_NAME,
+    README,
+    WORKFLOW,
+    load,
+    package_version,
+    step,
+)
 
-from fcs_deploy_gate.config import DEFAULT_BLOCKING_THRESHOLD, ordered_severities
-
-REPO = Path(__file__).resolve().parent.parent
-WORKFLOW = REPO / ".github" / "workflows" / "gate.yml"
-ACTION = REPO / ".github" / "actions" / "gate" / "action.yml"
-CI = REPO / ".github" / "workflows" / "ci.yml"
-README = REPO / "README.md"
-OWNER_AND_NAME = "lopmigtech/fcs-deploy-gate"
-DEFAULT_THRESHOLD = ",".join(ordered_severities(DEFAULT_BLOCKING_THRESHOLD))
 PINNED = re.compile(r"^\s*-?\s*uses:\s*(?P<ref>[^@\s]+)@(?P<sha>[0-9a-f]{40})\s+#\s*v\d[\w.-]*\s*$")
-
-
-def package_version() -> str:
-    data = tomllib.loads((REPO / "pyproject.toml").read_text())
-    return str(data["project"]["version"])
-
-
-def load(path: Path) -> dict[Any, Any]:
-    data = yaml.safe_load(path.read_text())
-    assert isinstance(data, dict)
-    return data
 
 
 def remote_uses(path: Path) -> list[str]:
@@ -43,12 +31,6 @@ def remote_uses(path: Path) -> list[str]:
         and "./" not in line.split("uses:")[1]
         and OWNER_AND_NAME not in line
     ]
-
-
-def step(action: dict[str, Any], step_id: str) -> dict[str, Any]:
-    [found] = [s for s in action["runs"]["steps"] if s.get("id") == step_id]
-    assert isinstance(found, dict)
-    return found
 
 
 def test_the_action_reference_carries_the_package_version() -> None:

@@ -97,11 +97,12 @@ runs:
       # it. A ref that cannot be fetched (force-pushed away) becomes a Baseline error for
       # the core to turn into a blocked Verdict, not a mute job failure.
       run: |
+        git worktree prune
         if git fetch --no-tags --depth=1 origin "$BASELINE_REF" \
           && git worktree add --detach "$RUNNER_TEMP/fcs-gate-baseline" FETCH_HEAD; then
           echo "checked_out=true" >> "$GITHUB_OUTPUT"
         else
-          echo "error=the Baseline ref $BASELINE_REF could not be checked out (not reachable from the remote; a force push may have removed it); pass an explicit Baseline ref" >> "$GITHUB_OUTPUT"
+          echo "error=the Baseline ref $BASELINE_REF could not be checked out (not reachable from the remote; a force push may have removed it)" >> "$GITHUB_OUTPUT"
         fi
 
     - id: gate

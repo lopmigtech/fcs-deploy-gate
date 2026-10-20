@@ -80,14 +80,16 @@ apply:
 
 What the instance must provide, once:
 
-- **Credentials.** `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` as masked, protected CI variables on the group that owns the Consumer projects. The core reads them from the environment; the template never echoes them.
-- **Job-token allowlist.** The Gate project must allow each Consumer project (Settings, CI/CD, Job token permissions) so the job can clone it with `CI_JOB_TOKEN`.
-- **Image mirror.** A mirror of `python:3.12` (the full image, which carries `git`) in the internal registry, named by `FCS_GATE_IMAGE`.
+- **Credentials.** `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` as masked (hidden) CI variables on the group that owns the Consumer projects. Not protected: merge-request pipelines run on unprotected source branches and would not see protected variables. The core reads them from the environment; the template never echoes them.
+- **Job-token allowlist.** The Gate project must allow the Consumer projects (Settings, CI/CD, Job token permissions; a group entry covers them all) so the job can clone it with `CI_JOB_TOKEN`, and the users who trigger pipelines need read access to the Gate project.
+- **Image mirror.** A mirror of `python:3.12` (the full image, which carries `git`) in the internal registry, named by `FCS_GATE_IMAGE`. The default assumes GitLab's own container registry (`$CI_REGISTRY`); point it elsewhere if the mirror lives in another registry, and allow the pull if that registry is another project's.
+- **Package index.** The job installs the Gate and PyYAML with `pip`, so runners need egress to PyPI or `PIP_INDEX_URL` set to an internal mirror.
+- **Stages and defaults.** The job runs in stage `test`; a pipeline whose `stages:` omits it must override `fcs-deploy-gate: { stage: <yours> }`. The job sets an empty `before_script`, so a Consumer's default `before_script` never runs on the Python image.
 - **Pipelines must succeed.** On each Consumer project, "Pipelines must succeed" under merge request settings, so an Enforcing block prevents the merge; the default-branch job before apply is the hard stop.
 - **Code Owners.** A `CODEOWNERS` entry routing `.fcs-gate.yml` to the Security team, with Code Owner approval required on the protected default branch (Premium or Ultimate), so no Exclusion merges without them.
 - **CI lint.** Run the instance's CI Lint (CI/CD, Pipeline editor, Validate) against a Consumer pipeline that includes the template before the first live run; that check cannot run here.
 
-Artifacts `verdict.json`, `summary.md` and the raw reports are kept under `fcs-gate/` on success and failure; the summary is also in the job log. The work directory is outside the checkout and copied in afterwards.
+Artifacts `verdict.json`, `summary.md` and the raw reports are kept under `fcs-gate/` on success and failure for the instance's default retention; the summary is also in the job log. The work directory is outside the checkout and copied in afterwards.
 
 ## How the Gate decides
 

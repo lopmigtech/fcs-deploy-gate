@@ -8,9 +8,18 @@ import re
 import subprocess
 from typing import Any
 
-from tests.test_github_adapter import ACTION, DEFAULT_THRESHOLD, README, REPO, load, package_version
+from tests.adapters import (
+    ACTION,
+    DEFAULT_THRESHOLD,
+    README,
+    REPO,
+    TEMPLATE,
+    load,
+    package_version,
+    run_flags,
+    step,
+)
 
-TEMPLATE = REPO / "gitlab" / "fcs-deploy-gate.gitlab-ci.yml"
 JOB = "fcs-deploy-gate"
 
 
@@ -34,7 +43,7 @@ def test_the_readme_include_snippet_pins_the_package_version() -> None:
     assert set(refs) == {package_version()}
 
 
-def test_the_variables_match_the_github_adapter_defaults() -> None:
+def test_the_consumer_variables_match_the_github_adapter_defaults() -> None:
     variables = template()["variables"]
     action_inputs = load(ACTION)["inputs"]
 
@@ -44,10 +53,27 @@ def test_the_variables_match_the_github_adapter_defaults() -> None:
     assert variables["FCS_GATE_BASELINE_REF"] == ""
     assert variables["FCS_GATE_REGION"] == ""  # required: the Consumer sets it
     assert "CI_PROJECT_PATH" in variables["FCS_GATE_PROJECT_NAME"]
+
+
+def test_the_instance_variables_name_the_image_the_project_and_a_scratch_outside_the_checkout() -> (
+    None
+):
+    variables = template()["variables"]
+
     assert "python" in variables["FCS_GATE_IMAGE"]
-    assert "FCS_GATE_PROJECT" in variables  # the Gate project's path on the GitLab instance
-    assert "FCS_GATE_WORK" in variables
-    assert "CI_PROJECT_DIR" not in variables["FCS_GATE_WORK"]  # outside the checkout
+    # The Gate project's path on the instance: the one GitLab-side reference to this
+    # repository, set by the maintainers, never a hardcoded clone URL in the script.
+    assert variables["FCS_GATE_PROJECT"]
+    assert "CI_PROJECT_DIR" not in variables["FCS_GATE_SCRATCH"]
+    assert variables["FCS_GATE_SCRATCH"].startswith("/")
+
+
+def test_both_adapters_run_the_core_with_the_same_flags() -> None:
+    github = run_flags(step(load(ACTION), "gate")["run"])
+    gitlab = run_flags(script_text(template()[JOB]))
+
+    assert github == gitlab
+    assert "--fcs-binary" not in github
 
 
 def test_the_job_runs_in_merge_request_and_default_branch_pipelines() -> None:
@@ -58,6 +84,7 @@ def test_the_job_runs_in_merge_request_and_default_branch_pipelines() -> None:
     assert any("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH" in c for c in conditions)
     assert job["image"] == "$FCS_GATE_IMAGE"
     assert job["timeout"] == "15m"
+    assert job["before_script"] == []  # a Consumer's default before_script must not run here
 
 
 def test_the_job_clones_the_gate_with_the_job_token_and_runs_the_core() -> None:
@@ -73,9 +100,10 @@ def test_the_job_clones_the_gate_with_the_job_token_and_runs_the_core() -> None:
     assert "CI_MERGE_REQUEST_DIFF_BASE_SHA" in text
     assert "CI_COMMIT_BEFORE_SHA" in text
     assert "$FCS_GATE_BASELINE_REF" in text
+    assert "git worktree prune" in text  # a stale registration survives the runner's build cache
     assert "git worktree add" in text
     assert "fcs-deploy-gate run" in text
-    assert '--work-dir "$FCS_GATE_WORK' in text
+    assert '--work-dir "$FCS_GATE_SCRATCH' in text
     assert all(flag in text for flag in ("--baseline-dir", "--baseline-ref", "--baseline-error"))
     assert "--fcs-binary" not in TEMPLATE.read_text()
     assert "FALCON_CLIENT_SECRET" not in text  # read by the core from the environment, never echoed
@@ -98,8 +126,9 @@ def test_artifacts_are_kept_on_success_and_failure() -> None:
 
     assert job["artifacts"]["when"] == "always"
     assert "fcs-gate/" in job["artifacts"]["paths"]
+    assert "expire_in" not in job["artifacts"]  # the instance's retention, as on GitHub
     assert "after_script" in job  # copies the work directory into the checkout for upload
-    assert "$FCS_GATE_WORK" in "\n".join(job["after_script"])
+    assert "$FCS_GATE_SCRATCH" in "\n".join(job["after_script"])
 
 
 def test_ci_lints_yaml() -> None:

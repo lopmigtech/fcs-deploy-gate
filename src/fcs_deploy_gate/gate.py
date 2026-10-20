@@ -225,7 +225,7 @@ def _scan_and_judge(
     baseline_path_present: bool | None = None
     if config.change_aware:
         if config.baseline_error:
-            return _blocked(config, config.baseline_error)
+            return _blocked(config, _with_explicit_ref_hint(config.baseline_error))
         if config.baseline_dir is None or not config.baseline_dir.is_dir():
             where = f" ({config.baseline_dir} is not a directory)" if config.baseline_dir else ""
             return _blocked(
@@ -274,6 +274,11 @@ def _scan_and_judge(
         block_on_unscanned_files=config.block_on_unscanned_files,
         cloud_rules_evidence=scanned.evidence,
     )
+
+
+def _with_explicit_ref_hint(message: str) -> str:
+    """An adapter reports what went wrong with the Baseline; the advice is the core's."""
+    return message if EXPLICIT_REF_HINT in message else f"{message}; {EXPLICIT_REF_HINT}"
 
 
 def _scan_path_within_repository(config: Config) -> Path:

@@ -337,3 +337,20 @@ def test_a_baseline_checkout_that_is_not_a_repository_root_is_used_as_given(
     baseline, _ = result.invocations
     assert baseline["cwd"] == str(gate.baseline_dir)
     assert result.verdict["baseline_path_present"] is True
+
+
+def test_the_core_adds_the_explicit_ref_advice_to_an_adapter_baseline_error(
+    gate: GateHarness,
+) -> None:
+    result = gate(
+        "--scope",
+        "change-aware",
+        "--baseline-error",
+        "the Baseline ref deadbeef could not be checked out",
+        today=TODAY,
+    )
+
+    assert result.verdict["error"] == (
+        "the Baseline ref deadbeef could not be checked out; "
+        "pass an explicit Baseline ref to the Gate"
+    )
