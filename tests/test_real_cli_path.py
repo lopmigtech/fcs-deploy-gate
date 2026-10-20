@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+from fcs_deploy_gate.download import CliPin
 from tests.conftest import FakeClock, GateHarness
 from tests.fake_falcon import TOKEN, FakeFalcon, pin_for
 
@@ -23,7 +24,8 @@ def test_missing_credentials_exit_2_before_any_network_call(gate: GateHarness) -
 def test_an_empty_checksum_pin_refuses_to_run_before_any_network_call(gate: GateHarness) -> None:
     falcon = FakeFalcon()
 
-    result = gate.real(falcon, pin=None)  # the code's own pin, which is empty
+    # An explicitly empty pin: the repository's own is filled in the work environment.
+    result = gate.real(falcon, pin=CliPin(version=falcon.version, sha256=""))
 
     assert result.exit_code == 2
     assert "pin" in result.stderr.lower()

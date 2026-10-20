@@ -30,9 +30,11 @@ class CliPin:
         return bool(self.sha256.strip())
 
 
-# The SHA-256 is filled from the work environment with `fcs-deploy-gate pin`; the Gate
-# refuses to download while it is empty.
-PIN = CliPin(version="4.2.3", sha256="")
+# Filled from the work environment with `fcs-deploy-gate pin` (README, "API clients, the
+# pin and the bounds"); the Gate refuses to download while the SHA-256 is empty.
+PIN = CliPin(
+    version="4.2.3", sha256="69e2144db0e881e0101df363e0b2ab8416a8a5d5c6eb6db1304559690772dc8f"
+)
 
 
 class DownloadError(Exception):
