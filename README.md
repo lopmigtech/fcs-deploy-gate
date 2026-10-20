@@ -238,7 +238,7 @@ pytest            # offline: the suite refuses to open sockets
 mypy
 ruff check && ruff format --check
 yamllint --strict .github gitlab .gitlab-ci.yml
-shellcheck --exclude=SC1087,SC2329 scripts/handoff-wizard.sh   # the exclusions are its library's
+shellcheck --exclude=SC1087,SC2317,SC2329 scripts/handoff-wizard.sh   # the exclusions are its library's
 ```
 
 The fake CLI is `tests/fake_fcs.py`; fixture reports are under `tests/fixtures/reports/`. CI runs the suite on Python 3.11 and 3.12 on every push and pull request.
