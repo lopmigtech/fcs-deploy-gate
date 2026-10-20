@@ -209,13 +209,16 @@ finish() {
 
 GATE_REPO_NAME="fcs-deploy-gate"
 
+# gh_ready succeeds when gh is installed and logged in.
+gh_ready() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
+
 # set_org_secret NAME VALUE sets a GitHub organisation secret visible to the
 # repositories in $GITHUB_SECRET_REPOS, via gh; otherwise it is listed to do by hand.
 set_org_secret() {
   local name="$1" value="$2"
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 &&
-    printf '%s' "$value" | gh secret set "$name" --org "$GITHUB_ORG" \
-      --visibility selected --repos "$GITHUB_SECRET_REPOS" >/dev/null 2>&1; then
+  say "Running: gh secret set $name --org $GITHUB_ORG --visibility selected --repos $GITHUB_SECRET_REPOS (value on stdin)"
+  if gh_ready && printf '%s' "$value" | gh secret set "$name" --org "$GITHUB_ORG" \
+      --visibility selected --repos "$GITHUB_SECRET_REPOS" >/dev/null; then
     WRITTEN_SECRET+=("$name")
     printf '  %s✓ set%s organisation secret %s on %s\n' "$GREEN" "$RESET" "$name" "$GITHUB_ORG"
     return
@@ -239,12 +242,13 @@ console_host() {
   esac
 }
 
-# need_ci_secret asks for the CI client secret again when a resumed run no longer
-# holds it in memory.
-need_ci_secret() {
-  [[ -n "${CI_CLIENT_SECRET:-}" ]] && return 0
-  note "The CI client secret is held in memory only, so a resumed run needs it again."
-  ask_secret CI_CLIENT_SECRET "Paste the CI client secret:"
+# ask_ci_secret reads the CI client secret, hidden, until something is entered. It is
+# held in memory for the run and never written to ENV_FILE; later stages call this
+# again and it returns at once while the value is held.
+ask_ci_secret() {
+  until [[ -n "${CI_CLIENT_SECRET:-}" ]]; do
+    ask_secret CI_CLIENT_SECRET "Paste the CI client secret:"
+  done
 }
 
 run_wizard() {
@@ -262,7 +266,7 @@ say "running it, and keeps what you confirm in $ENV_FILE."
 PYTHON=$(command -v python || command -v python3) || { warn "no python on PATH"; exit 1; }
 "$PYTHON" -c 'import pytest, fcs_deploy_gate' 2>/dev/null || warn "pytest or the Gate is not importable: pip install -e '.[dev]' (the pin and release stages need both)"
 command -v fcs-deploy-gate >/dev/null 2>&1 || warn "fcs-deploy-gate is not on PATH: activate the virtualenv (the pin stage needs it)"
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+if gh_ready; then
   note "gh is authenticated: secrets, the access policy and the live run can be set from here"
 else
   note "gh is missing or not logged in: those steps fall back to the browser"
@@ -310,11 +314,14 @@ pause "Pushed? Press Enter."
 if [[ "$CURRENT" == "$TARGET" ]]; then
   note "the reference already reads $TARGET; nothing to replace"
 else
-  mapfile -t FILES < <(git grep -l -F "$CURRENT" || true)
+  # The issue-tracker pointers in AGENTS.md and docs/agents are not the adapter's
+  # reference: they change only if the issues move, and are listed below to judge.
+  mapfile -t FILES < <(git grep -l -F "$CURRENT" -- . ':!AGENTS.md' ':!docs/agents' || true)
+  ESCAPED=$(printf '%s' "$CURRENT" | sed 's/[][\.*^$#&]/\\&/g')
   say "Files that carry $CURRENT:"
   for f in "${FILES[@]}"; do note "  $f"; done
   if confirm "Replace $CURRENT with $TARGET in these files?"; then
-    for f in "${FILES[@]}"; do sed -i "s#$CURRENT#$TARGET#g" "$f"; done
+    for f in "${FILES[@]}"; do sed -i "s#$ESCAPED#$TARGET#g" "$f"; done
     if "$PYTHON" -m pytest -q tests/test_github_adapter.py tests/test_gitlab_adapter.py; then
       note "the adapter tests pass with the new reference"
     else
@@ -360,13 +367,15 @@ step "Scopes: Cloud Security Tools Download: Read. Infrastructure as Code: Read 
 step "Create, then copy the client id and the secret: the secret is shown once. Keep both"
 step "in the team password manager too; the GitLab variables are pasted by hand later."
 ask CI_CLIENT_ID "Paste the CI client id:"
-ask_secret CI_CLIENT_SECRET "Paste the CI client secret:"
+until [[ -n "$CI_CLIENT_ID" ]]; do ask CI_CLIENT_ID "Paste the CI client id:"; done
+ask_ci_secret
 write_env CI_CLIENT_ID "$CI_CLIENT_ID"
 note "the secret stays in memory for this run and is never written to $ENV_FILE"
 if confirm "Does the client show exactly those two scopes?"; then
   record CI_CLIENT "created with the two scopes"
 else
   warn "fix the scopes before going on"
+  record CI_CLIENT "scopes not confirmed"
 fi
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
@@ -383,13 +392,14 @@ if confirm "Four Read scopes, and CSPM registration Write unticked?"; then
   record MAPPING_CLIENT "created read-only"
 else
   warn "fix the scopes before going on"
+  record MAPPING_CLIENT "scopes not confirmed"
 fi
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
 stage "GitHub organisation secrets"
 say "FALCON_CLIENT_ID and FALCON_CLIENT_SECRET as organisation secrets, visible to the"
 say "selected repositories only: $GITHUB_SECRET_REPOS."
-need_ci_secret
+ask_ci_secret
 open_url "https://github.com/organizations/$GITHUB_ORG/settings/secrets/actions"
 set_org_secret FALCON_CLIENT_ID "$CI_CLIENT_ID"
 set_org_secret FALCON_CLIENT_SECRET "$CI_CLIENT_SECRET"
@@ -397,6 +407,8 @@ step "If either was skipped: New organisation secret, the name above, repository
 step "\"Selected repositories\", pick $GITHUB_SECRET_REPOS."
 if confirm "Both secrets present with selected-repository access?"; then
   record GITHUB_ORG_SECRETS "placed"
+else
+  record GITHUB_ORG_SECRETS "not confirmed"
 fi
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
@@ -415,6 +427,8 @@ if confirm "Both variables added, masked?"; then
   else
     record GITLAB_GROUP_VARIABLES "masked, protected: default-branch pipelines only"
   fi
+else
+  record GITLAB_GROUP_VARIABLES "not confirmed"
 fi
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
@@ -422,7 +436,8 @@ stage "GitHub: the repository access policy"
 say "A reusable workflow and a composite action in a private repository are callable from"
 say "the organisation's other repositories only when the repository says so."
 open_url "https://github.com/$TARGET/settings/actions"
-if command -v gh >/dev/null 2>&1 && gh api -X PUT "repos/$TARGET/actions/permissions/access" -f access_level=organization >/dev/null 2>&1; then
+say "Running: gh api -X PUT repos/$TARGET/actions/permissions/access -f access_level=organization"
+if gh_ready && gh api -X PUT "repos/$TARGET/actions/permissions/access" -f access_level=organization >/dev/null; then
   printf '  %s✓ set%s access level: organization\n' "$GREEN" "$RESET"
 else
   step "Access: \"Accessible from repositories in the organization\", Save."
@@ -432,10 +447,12 @@ step "On the organisation's Actions policy, check that actions/checkout, actions
 step "and actions/upload-artifact are allowed (the action pins them by commit)."
 if confirm "Access policy set and the three actions allowed?"; then
   record GITHUB_ACCESS_POLICY "organization"
+else
+  record GITHUB_ACCESS_POLICY "not confirmed"
 fi
 
 # ── 9 ─────────────────────────────────────────────────────────────────────
-stage "GitLab: job-token allowlist, image mirror, instance variables"
+stage "GitLab: job token permissions, image mirror, instance variables"
 say "Consumer jobs clone the Gate project with their CI_JOB_TOKEN, run on a mirrored Python"
 say "image, and read the Gate's path and image from variables set once."
 open_url "$GITLAB_URL/$GITLAB_GATE_PROJECT/-/settings/ci_cd"
@@ -446,15 +463,17 @@ write_env FCS_GATE_IMAGE "$FCS_GATE_IMAGE"
 step "On the group ($GITLAB_URL/groups/$GITLAB_GROUP/-/settings/ci_cd) or the instance, add"
 step "FCS_GATE_IMAGE = $FCS_GATE_IMAGE and FCS_GATE_PROJECT = $GITLAB_GATE_PROJECT."
 step "Runners need egress to the Falcon API host, the pre-signed download host and PyPI (or PIP_INDEX_URL)."
-if confirm "Allowlist, image and the two variables in place?"; then
-  record GITLAB_INSTANCE_SETUP "allowlist, image, variables"
+if confirm "Job token permissions, image and the two variables in place?"; then
+  record GITLAB_INSTANCE_SETUP "job token permissions, image, variables"
+else
+  record GITLAB_INSTANCE_SETUP "not confirmed"
 fi
 
 # ── 10 ────────────────────────────────────────────────────────────────────
 stage "Fill the checksum pin"
 say "The Gate refuses to download the CLI while the pin's SHA-256 is empty. The pin"
 say "command asks the download API for the pinned version and prints what it publishes."
-need_ci_secret
+ask_ci_secret
 command -v fcs-deploy-gate >/dev/null 2>&1 || { warn "fcs-deploy-gate is not on PATH; activate the virtualenv and re-run"; exit 1; }
 note "Proxies are honoured from HTTPS_PROXY and NO_PROXY in this shell."
 say "Running: fcs-deploy-gate pin --region $FALCON_REGION (credentials in its environment only)"
@@ -484,7 +503,6 @@ fi
 stage "Release: an immutable tag"
 say "A release is the package version in pyproject.toml, both adapter references at the"
 say "same version, one commit, one tag that is never moved (README, \"Release procedure\")."
-git fetch --quiet --tags 2>/dev/null || true
 RELEASE_VERSION=$("$PYTHON" -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
 if "$PYTHON" -m pytest -q tests/test_github_adapter.py tests/test_gitlab_adapter.py; then
   note "the adapter references agree with version $RELEASE_VERSION"
@@ -494,30 +512,44 @@ else
 fi
 RELEASE_TAG="v$RELEASE_VERSION"
 ask GIT_REMOTE "Git remote that points at github.com/$TARGET:"
+until git remote get-url "$GIT_REMOTE" >/dev/null 2>&1; do
+  warn "no remote named $GIT_REMOTE"
+  ask GIT_REMOTE "Git remote that points at github.com/$TARGET:"
+done
 write_env GIT_REMOTE "$GIT_REMOTE"
+say "Running: git fetch --tags $GIT_REMOTE"
+git fetch --quiet --tags "$GIT_REMOTE" || warn "the fetch failed; going on with local refs"
 if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
   note "$RELEASE_TAG already exists; tags are never moved, so nothing is tagged"
+elif ! git merge-base --is-ancestor HEAD "refs/remotes/$GIT_REMOTE/main" 2>/dev/null; then
+  warn "HEAD ($(git rev-parse --short HEAD)) is not on $GIT_REMOTE/main; check out the merged pin commit and re-run"
 else
-  say "HEAD is $(git rev-parse --short HEAD) on $(git rev-parse --abbrev-ref HEAD); it must be the merged pin commit on main."
+  say "HEAD is $(git rev-parse --short HEAD), on $GIT_REMOTE/main."
+  say "On yes: git tag -a $RELEASE_TAG -m \"fcs-deploy-gate $RELEASE_TAG\" && git push $GIT_REMOTE $RELEASE_TAG"
   if confirm "Tag $RELEASE_TAG here and push it to $GIT_REMOTE? (a tag is never moved afterwards)"; then
     git tag -a "$RELEASE_TAG" -m "fcs-deploy-gate $RELEASE_TAG"
     git push "$GIT_REMOTE" "$RELEASE_TAG"
   fi
 fi
-if [[ "$GITLAB_MIRROR" == "push" ]]; then
-  step "Push main and $RELEASE_TAG to the GitLab remote as well."
+if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+  if [[ "$GITLAB_MIRROR" == "push" ]]; then
+    step "Push main and $RELEASE_TAG to the GitLab remote as well."
+  else
+    step "Let the pull mirror update (Settings, Repository, Mirroring repositories, Update now) so $GITLAB_GATE_PROJECT has $RELEASE_TAG."
+  fi
+  write_env RELEASE_TAG "$RELEASE_TAG"
 else
-  step "Let the pull mirror update (Settings, Repository, Mirroring repositories, Update now) so $GITLAB_GATE_PROJECT has $RELEASE_TAG."
+  warn "there is no $RELEASE_TAG yet; the live runs below need it"
 fi
 pause
-write_env RELEASE_TAG "$RELEASE_TAG"
 
 # ── 12 ────────────────────────────────────────────────────────────────────
 stage "First Advisory run on GitHub"
 say "The Live check workflow calls the reusable workflow against the insecure fixture in"
-say "Advisory mode: the run passes and the summary shows what the Gate would block."
+say "Advisory mode: the job succeeds and the summary shows what the Gate would block."
 open_url "https://github.com/$TARGET/actions/workflows/live-check.yml"
-if command -v gh >/dev/null 2>&1 && confirm "Start it from here with gh (region $FALCON_REGION, advisory)?"; then
+say "On yes: gh workflow run live-check.yml -R $TARGET -f region=$FALCON_REGION -f mode=advisory"
+if gh_ready && confirm "Start it from here with gh?"; then
   if gh workflow run live-check.yml -R "$TARGET" -f "region=$FALCON_REGION" -f mode=advisory; then
     note "started; it appears on the page in a moment"
   else
@@ -567,7 +599,11 @@ step "Sanitise before it enters the repository: scan_uuid, path, repository deta
 step "account id or host name; keep the structure, severities and rule UUIDs."
 ask REAL_REPORT_PATH "Local path of the raw report (kept out of git):"
 write_env REAL_REPORT_PATH "$REAL_REPORT_PATH"
-record REAL_REPORT "captured"
+if confirm "Saved outside the repository, with nothing from it committed yet?"; then
+  record REAL_REPORT "captured"
+else
+  record REAL_REPORT "not confirmed"
+fi
 
 # ── 15 ────────────────────────────────────────────────────────────────────
 stage "Confirm the console upload"

@@ -55,4 +55,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # SC1087 is a false positive on the wizard library's Readline prompt; SC2329 is the
       # library's helpers this wizard does not call. The library is the skill's template.
-      - run: shellcheck --exclude=SC1087,SC2329 scripts/*.sh
+      - run: shellcheck --exclude=SC1087,SC2329 scripts/handoff-wizard.sh

@@ -6,7 +6,10 @@
 # What the scan should report, by what each block opens or omits: public access (the
 # access block turned off, the public-read ACL, the bucket policy granting s3:GetObject
 # to everyone), no server-side encryption configuration, no access logging, no
-# versioning, and a bucket without a single tag.
+# versioning, and a bucket without a single tag. One caveat for the mapping measurement:
+# AWS encrypts every new bucket with SSE-S3 by default, so the applied bucket is encrypted
+# at rest; expect the IaC Finding for the missing encryption configuration, but perhaps
+# no IOM for it.
 
 terraform {
   required_version = ">= 1.5.0"

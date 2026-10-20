@@ -16,6 +16,30 @@ FIXTURE = REPO / "tests" / "fixtures" / "terraform" / "insecure-bucket"
 FIXTURE_PATH = FIXTURE.relative_to(REPO).as_posix()
 LIVE_CHECK_GITHUB = REPO / ".github" / "workflows" / "live-check.yml"
 LIVE_CHECK_GITLAB = REPO / ".gitlab-ci.yml"
+WIZARD = REPO / "scripts" / "handoff-wizard.sh"
+# The steps the ticket lists, in its order; each matches one stage title.
+HANDOFF_STEPS = (
+    "CI client",
+    "mapping client",
+    "GitHub organisation secrets",
+    "GitLab group variables",
+    "access policy",
+    "job token permissions",
+    "checksum pin",
+    "release",
+    "Advisory run on GitHub",
+    "Advisory run on GitLab",
+    "real report",
+    "console upload",
+)
+PUBLIC_HOSTS = {
+    "github.com",
+    "falcon.crowdstrike.com",
+    "falcon.us-2.crowdstrike.com",
+    "falcon.eu-1.crowdstrike.com",
+    "falcon.laggar.gcw.crowdstrike.com",
+    "falcon.us-gov-2.crowdstrike.mil",
+}
 
 
 def fixture_source() -> str:
@@ -77,32 +101,6 @@ def test_the_gitlab_live_check_includes_the_template_on_the_fixture_by_hand_only
     assert "FCS_GATE_REGION" not in pipeline["variables"]  # set in the run form
 
 
-WIZARD = REPO / "scripts" / "handoff-wizard.sh"
-# The steps the ticket lists, in its order; each matches one stage title.
-HANDOFF_STEPS = (
-    "CI client",
-    "mapping client",
-    "GitHub organisation secrets",
-    "GitLab group variables",
-    "access policy",
-    "job-token allowlist",
-    "checksum pin",
-    "release",
-    "Advisory run on GitHub",
-    "Advisory run on GitLab",
-    "real report",
-    "console upload",
-)
-PUBLIC_HOSTS = {
-    "github.com",
-    "falcon.crowdstrike.com",
-    "falcon.us-2.crowdstrike.com",
-    "falcon.eu-1.crowdstrike.com",
-    "falcon.laggar.gcw.crowdstrike.com",
-    "falcon.us-gov-2.crowdstrike.mil",
-}
-
-
 def test_the_wizard_parses_and_walks_the_handoff_steps_in_the_ticket_order() -> None:
     subprocess.run(["bash", "-n", str(WIZARD)], check=True)
     assert os.access(WIZARD, os.X_OK)
@@ -117,7 +115,8 @@ def test_the_wizard_parses_and_walks_the_handoff_steps_in_the_ticket_order() -> 
         assert matching, f"no stage for {keyword!r} among {stages}"
         positions.append(matching[0])
     assert positions == sorted(positions), stages
-    assert text.count("pause ") + text.count("confirm ") >= len(stages)
+    bodies = re.split(r'^stage "', text.split("run_wizard() {", 1)[1], flags=re.MULTILINE)[1:]
+    assert all(re.search(r"\b(pause|confirm)\b", body) for body in bodies), "a stage never pauses"
 
 
 def test_the_wizard_places_the_secrets_the_adapters_read_and_persists_none() -> None:
@@ -173,6 +172,6 @@ def test_the_readme_documents_release_migration_and_what_only_the_work_environme
     assert "pyproject.toml" in release and "both adapter references" in release
     assert "never moved" in release and "pull mirror" in release
     migration = section["Migration checklist"]
-    for item in ("gate.yml", "organisation secrets", "access policy", "job-token", "image mirror"):
+    for item in ("gate.yml", "organisation secrets", "access policy", "job token", "image mirror"):
         assert item in migration.lower(), item
     assert section["Verified only in the work environment"].count("\n- ") >= 5
