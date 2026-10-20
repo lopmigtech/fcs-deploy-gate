@@ -1,0 +1,80 @@
+# The GitLab adapter: an included CI template (ADR 0004). A Consumer includes it at a tag
+# and makes its apply job depend on the gate job. The job clones the Gate project at the
+# same tag with the job token, resolves the Baseline through the core from GitLab's
+# variables, checks the Baseline out into a second directory, runs the core, and keeps the
+# verdict and reports as artifacts. No gate logic lives here: every decision, including a
+# Baseline error, is the core's.
+#
+# Consumer variables (set in the including .gitlab-ci.yml or the project's CI settings):
+#   FCS_GATE_REGION   required; FCS_GATE_PATH, FCS_GATE_SCOPE, FCS_GATE_MODE,
+#   FCS_GATE_BLOCKING_THRESHOLD, FCS_GATE_PROJECT_NAME, FCS_GATE_BASELINE_REF optional.
+# Instance variables (set once by the Gate maintainers): FCS_GATE_IMAGE (the mirrored
+#   Python image), FCS_GATE_PROJECT (the Gate project's path on this GitLab instance).
+# Credentials: FALCON_CLIENT_ID and FALCON_CLIENT_SECRET as masked, protected CI variables
+#   at group level; the core reads them from the environment and never passes them on.
+
+variables:
+  FCS_GATE_IMAGE: "$CI_REGISTRY/mirror/python:3.12"
+  FCS_GATE_PROJECT: "security/fcs-deploy-gate"
+  FCS_GATE_REF: "v0.1.0"
+  FCS_GATE_PATH: "."
+  FCS_GATE_SCOPE: "whole-tree"
+  FCS_GATE_MODE: "enforcing"
+  FCS_GATE_BLOCKING_THRESHOLD: "critical,high,medium"
+  FCS_GATE_REGION: ""
+  FCS_GATE_PROJECT_NAME: "$CI_PROJECT_PATH"
+  FCS_GATE_BASELINE_REF: ""
+  FCS_GATE_WORK: "/tmp/fcs-gate"
+
+fcs-deploy-gate:
+  stage: test
+  image: $FCS_GATE_IMAGE
+  timeout: 15m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    # The Gate itself, at the tag this template carries, via the job token (the Gate
+    # project must allow this project in its job-token allowlist).
+    - git clone --quiet --depth 1 --branch "$FCS_GATE_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}/${FCS_GATE_PROJECT}.git" "$FCS_GATE_WORK/gate-src"
+    - python -m pip install --quiet "$FCS_GATE_WORK/gate-src"
+    # The Baseline ref, through the core: merge-request diff base in merge-request
+    # pipelines, previous commit in branch pipelines, an explicit variable always winning.
+    - |
+      BASELINE_REF=""
+      BASELINE_ERROR=""
+      if [ "$FCS_GATE_SCOPE" = "change-aware" ]; then
+        if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then PIPELINE=merge-request; else PIPELINE=branch; fi
+        RESOLVED="$(fcs-deploy-gate resolve-baseline --pipeline "$PIPELINE" --explicit-ref "$FCS_GATE_BASELINE_REF" --merge-base "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" --previous-commit "${CI_COMMIT_BEFORE_SHA:-}")"
+        echo "$RESOLVED"
+        case "$RESOLVED" in
+          ref=*) BASELINE_REF="${RESOLVED#ref=}" ;;
+          error=*) BASELINE_ERROR="${RESOLVED#error=}" ;;
+        esac
+      fi
+    # The whole repository at the Baseline ref, in a worktree outside the checkout; the
+    # core scans the scanned path's counterpart in it. A ref that cannot be fetched becomes
+    # a Baseline error for the core to turn into a blocked Verdict.
+    - |
+      if [ -n "$BASELINE_REF" ]; then
+        if git fetch --no-tags --depth=1 origin "$BASELINE_REF" && git worktree add --detach "$FCS_GATE_WORK/baseline" FETCH_HEAD; then
+          :
+        else
+          BASELINE_ERROR="the Baseline ref $BASELINE_REF could not be checked out (not reachable from the remote; a force push may have removed it); pass an explicit Baseline ref"
+        fi
+      fi
+    # The core writes verdict.json, summary.md and the raw reports to the work directory
+    # and exits 1 on a blocked Verdict only in enforcing mode; that exit code is the job's.
+    - |
+      fcs-deploy-gate run --path "$FCS_GATE_PATH" --region "$FCS_GATE_REGION" --scope "$FCS_GATE_SCOPE" --mode "$FCS_GATE_MODE" \
+        --blocking-threshold "$FCS_GATE_BLOCKING_THRESHOLD" --project-name "$FCS_GATE_PROJECT_NAME" \
+        --work-dir "$FCS_GATE_WORK/out" \
+        --baseline-dir "$FCS_GATE_WORK/baseline" --baseline-ref "$BASELINE_REF" --baseline-error "$BASELINE_ERROR"
+  after_script:
+    # Artifacts must live under the checkout; copy them in whether the job passed or failed.
+    - mkdir -p "$CI_PROJECT_DIR/fcs-gate" && cp -r "$FCS_GATE_WORK/out/." "$CI_PROJECT_DIR/fcs-gate/" 2>/dev/null || true
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - fcs-gate/

@@ -44,6 +44,51 @@ In Change-aware Scope on GitHub the Baseline is the pull request's base commit (
 
 The reusable workflow is one job with a fifteen-minute timeout and read-only contents permission; its single step calls the composite action in this repository, which checks out the change, installs the Gate from its own checkout, resolves the Baseline through the core, checks the Baseline out into a worktree outside the workspace when the Scope is change-aware, runs the core with the work directory under the runner's temporary directory, and uploads the artifacts even when the run fails. The Consumer organisation must allow this repository's workflows and actions to be used by other repositories (repository settings, Actions, Access: "Accessible from repositories in the organization").
 
+## GitLab quick start
+
+Include the template at a tag and make the apply job depend on the gate job. The job runs in merge-request pipelines and in default-branch pipelines, before apply.
+
+```yaml
+include:
+  - project: security/fcs-deploy-gate      # the Gate project's path on your GitLab instance
+    ref: v0.1.0
+    file: /gitlab/fcs-deploy-gate.gitlab-ci.yml
+
+variables:
+  FCS_GATE_REGION: us-gov-1
+  FCS_GATE_PATH: infra/prod
+  FCS_GATE_SCOPE: change-aware            # or whole-tree
+  FCS_GATE_MODE: advisory                 # flip to enforcing when the backlog is down
+
+apply:
+  stage: deploy
+  needs: [plan, fcs-deploy-gate]
+  ...
+```
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `FCS_GATE_REGION` | yes | | Falcon region |
+| `FCS_GATE_PATH` | no | `.` | Terraform directory to scan |
+| `FCS_GATE_SCOPE` | no | `whole-tree` | `whole-tree` or `change-aware` |
+| `FCS_GATE_MODE` | no | `enforcing` | `enforcing` or `advisory` |
+| `FCS_GATE_BLOCKING_THRESHOLD` | no | `critical,high,medium` | Severities that block |
+| `FCS_GATE_PROJECT_NAME` | no | `$CI_PROJECT_PATH` | Project name for the console upload |
+| `FCS_GATE_BASELINE_REF` | no | pipeline default | Change-aware only: an explicit Baseline ref; otherwise the merge request's diff base, or the push's previous commit |
+| `FCS_GATE_IMAGE` | instance | `$CI_REGISTRY/mirror/python:3.12` | The mirrored Python image the job runs on (it needs `git`) |
+| `FCS_GATE_PROJECT` | instance | `security/fcs-deploy-gate` | The Gate project's path on the instance (a pull mirror of this repository) |
+
+What the instance must provide, once:
+
+- **Credentials.** `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` as masked, protected CI variables on the group that owns the Consumer projects. The core reads them from the environment; the template never echoes them.
+- **Job-token allowlist.** The Gate project must allow each Consumer project (Settings, CI/CD, Job token permissions) so the job can clone it with `CI_JOB_TOKEN`.
+- **Image mirror.** A mirror of `python:3.12` (the full image, which carries `git`) in the internal registry, named by `FCS_GATE_IMAGE`.
+- **Pipelines must succeed.** On each Consumer project, "Pipelines must succeed" under merge request settings, so an Enforcing block prevents the merge; the default-branch job before apply is the hard stop.
+- **Code Owners.** A `CODEOWNERS` entry routing `.fcs-gate.yml` to the Security team, with Code Owner approval required on the protected default branch (Premium or Ultimate), so no Exclusion merges without them.
+- **CI lint.** Run the instance's CI Lint (CI/CD, Pipeline editor, Validate) against a Consumer pipeline that includes the template before the first live run; that check cannot run here.
+
+Artifacts `verdict.json`, `summary.md` and the raw reports are kept under `fcs-gate/` on success and failure; the summary is also in the job log. The work directory is outside the checkout and copied in afterwards.
+
 ## How the Gate decides
 
 The core is complete through the run entry point: both Scopes, Exclusions, and the real CLI path (token, pinned download, retries). The suite proves it offline with a fake Falcon API and a fake CLI; the first live run happens in the work environment.

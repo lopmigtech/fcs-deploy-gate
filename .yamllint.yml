@@ -1,0 +1,9 @@
+# Lint for the adapter YAML. GitHub's `on:` key and GitLab's long script lines are by design.
+extends: default
+rules:
+  line-length: disable
+  document-start: disable
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
