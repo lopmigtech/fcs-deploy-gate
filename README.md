@@ -166,7 +166,7 @@ exclusions:
     approved_by: security-reviewer@example.gov       # the approving Security team member
 ```
 
-- Every field named by an entry must match the Finding: the rule id exactly, the resource as `type.name`, the file as the path the Gate reports. At least one of `resource` or `file` is required; `reason` and `approved_by` must be non-empty.
+- Every field named by an entry must match the Finding: the rule id exactly, the resource as `type.name`, the file as the path the Gate reports. The name is the CLI's: a resource's `name` attribute when it sets one, unresolved (`aws_cloudwatch_log_group./aws/lambda/${local.function_name}`), otherwise its Terraform label (`aws_lambda_function.pilot`); an account-level rule reports `n/a.n/a`. Copy it from the summary, or match on `file` alone. At least one of `resource` or `file` is required; `reason` and `approved_by` must be non-empty.
 - An Exclusion applies through its expiry date and stops the day after. Dates are compared as UTC calendar days.
 - Stale exclusions are reported, never dropped silently: entries that have expired, and entries that match no Finding in the current scan. When two entries cover one Finding, the first in the file is the one recorded; the second still counts as matched.
 - Any malformation (unknown keys, missing fields, an unparseable date, the wrong shape) exits 2 in both modes, before any scan.

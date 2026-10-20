@@ -23,7 +23,7 @@ variables:
   FCS_GATE_PATH: lambda
   FCS_GATE_MODE: advisory               # the demo's second act flips this to enforcing
   # FCS_GATE_IMAGE: an image your runners can pull that carries python and git
-  # FCS_GATE_BLOCKING_THRESHOLD: critical,high,medium,informational  # if the retention Finding is informational
+  FCS_GATE_BLOCKING_THRESHOLD: critical,high,medium,informational  # the retention Finding is informational
   TF_ROOT: lambda
   TF_STATE_NAME: pilot
   TF_VAR_region: us-gov-west-1

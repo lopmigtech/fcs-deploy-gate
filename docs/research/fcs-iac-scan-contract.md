@@ -243,9 +243,13 @@ Status: default `--fail-on` all-ones: confirmed (T1). `>=`: inferred. `0` =
 clean and `40` = thresholds tripped: confirmed by three independent CrowdStrike
 sources. `20`: observed 2026-10-20 on the first live scan (CLI 4.2.3, pinned,
 us-gov-1, a Terraform directory with one Lambda function, `--fail-on` all-ones):
-the scan reached 100%, wrote its JSON report and exited 20, which fits the VS Code
-severity-band reading (highest matched Severity medium) and not IntelliJ's "auth
-error". The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
+the scan reached 100%, wrote its JSON report and exited 20; the report's highest
+Severity was medium (one Finding) with six informational, which confirms the VS
+Code severity-band reading and not IntelliJ's "auth error". The same report named
+resources by their `name` attribute, unresolved (`/aws/lambda/${local.function_name}`,
+`fcs-gate-pilot-<unknown-sufix>` from `name_prefix`), by the Terraform label when
+there is no `name` (`pilot` for a function with `function_name`), and `n/a` for an
+account-level rule. The Gate now accepts 0, 10, 20, 30 and 40 as completed when a report was
 written. Meaning of 1, 2, 50, 201-207: unverified (conflicting CrowdStrike
 comments). Secrets in thresholds: unverified (inferred not
 countable). Error-vs-findings by code alone: unverified beyond {0, 40}.

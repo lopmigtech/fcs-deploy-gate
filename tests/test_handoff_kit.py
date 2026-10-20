@@ -190,6 +190,7 @@ def test_the_pilot_pipeline_includes_the_template_and_gates_the_apply() -> None:
     assert variables["FCS_GATE_PROJECT"] == include["project"]
     assert variables["FCS_GATE_PATH"] == "lambda"
     assert variables["FCS_GATE_MODE"] == "advisory"  # the first act
+    assert variables["FCS_GATE_BLOCKING_THRESHOLD"] == "critical,high,medium,informational"
     assert "test" in pipeline["stages"]  # the template's job runs in stage test
     assert pipeline["apply"]["stage"] in pipeline["stages"]
     assert set(pipeline["apply"]["needs"]) == {"plan", "fcs-deploy-gate"}

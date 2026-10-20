@@ -28,6 +28,10 @@ data "aws_partition" "current" {}
 
 locals {
   function_name = "fcs-gate-pilot"
+  tags = {
+    Project = "fcs-deploy-gate-pilot"
+    Owner   = "security"
+  }
 }
 
 data "archive_file" "handler" {
@@ -52,6 +56,7 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "pilot" {
   name_prefix        = "fcs-gate-pilot-"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+  tags               = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "logs" {
@@ -61,9 +66,13 @@ resource "aws_iam_role_policy_attachment" "logs" {
 
 # The function's log group, declared so that Terraform owns it rather than Lambda
 # creating it on first invoke. Without retention_in_days the group keeps logs forever:
-# that is the pilot's Finding. The fix: add  retention_in_days = 30  to this block.
+# that is the pilot's Finding, "CloudWatch Without Retention Period Specified",
+# informational. The fix: add  retention_in_days = 30  to this block. The scanner also
+# raises "CloudWatch Log Group Without KMS" (medium) here; that one is excluded in the
+# demo, since a customer-managed key is outside what this pilot is about.
 resource "aws_cloudwatch_log_group" "pilot" {
   name = "/aws/lambda/${local.function_name}"
+  tags = local.tags
 }
 
 resource "aws_lambda_function" "pilot" {
@@ -73,6 +82,11 @@ resource "aws_lambda_function" "pilot" {
   handler          = "handler.handler"
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
+  tags             = local.tags
+
+  tracing_config {
+    mode = "Active"
+  }
 
   depends_on = [aws_cloudwatch_log_group.pilot, aws_iam_role_policy_attachment.logs]
 }
