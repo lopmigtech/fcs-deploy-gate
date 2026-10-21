@@ -148,7 +148,9 @@ Settings, CI/CD, expand "Runners", "Create project runner".
 
 ## 5. Set up the laptop runner
 
-From WSL, as your own user. Nothing here needs root.
+From WSL, as your own user. Nothing here needs root. If the instance does not let you
+create a project runner at all (no "Create project runner" button, or it refuses), skip
+to 5E, which executes the same pipeline file on the laptop without a runner.
 
 ### 5a. Install the runner, a Python environment for the jobs, and Terraform
 
@@ -228,6 +230,82 @@ The runner checks out each job under `~/runner/builds/`. In the pilot project, S
 CI/CD, Runners should now list `laptop-pilot` with a green online marker. Nothing runs yet;
 there is no pipeline.
 
+### 5E. No project runner: execute the pipeline file on the laptop
+
+When the instance does not let you create a runner, the pipeline file can still be
+executed on the laptop by `gitlab-ci-local`, an open-source local executor for
+`.gitlab-ci.yml`. It reads the pilot's own file, fetches the same include from the Gate
+project, honours stages, `needs` and `rules`, runs each job in your shell, prints the
+job logs side by side, and ends with a PASS or FAIL line per job. There is no web page;
+the terminal is the visual. Three things differ from a real pipeline, and the run
+command below covers each: there is no job token, the project id is a placeholder, and
+no image is pulled.
+
+Everything in the browser sections still applies, except 4c, the runner. The Gate must
+be on GitLab (step 2), the pilot project must exist with the Infrastructure feature on
+(4a), because the Terraform state still lives there, and the pilot repository is created
+exactly as in step 6. The project variables of 4b are not read by a local run; your
+shell's environment takes their place.
+
+**Setup, once.**
+
+```sh
+sudo dnf install -y nodejs npm
+npm install -g --prefix ~/.local gitlab-ci-local
+gitlab-ci-local --version
+python3 -m venv ~/gate-venv                       # if 5a did not run
+terraform version                                 # install as in 5a if missing
+git ls-remote https://<gitlab-host>/mlopez/fcs-iac.git HEAD
+```
+
+The last command must print a commit id without asking for credentials: the include is
+fetched with a plain `git clone` that cannot answer a prompt. If it asks, run
+`git config --global credential.helper 'cache --timeout=86400'`, run the `ls-remote` once
+more and enter the credentials; they are cached for the day.
+
+Create a personal access token to stand in for the job token: your avatar, Preferences,
+Access tokens, scope `api`, expiry the day after the demo. It is used for the clone of
+the Gate project and for the Terraform state. Keep it in your shell, never in a file.
+
+**Before each run**, in the pilot repository:
+
+```sh
+cd ~/lambda-retention-pilot
+source ~/gate-venv/bin/activate
+export AWS_PROFILE=<sandbox profile>              # after aws sso login
+export FALCON_CLIENT_ID=... FALCON_CLIENT_SECRET=...   # as for today's laptop scans
+read -rs -p "GitLab token: " GL_TOKEN; echo
+```
+
+**The run**, which stands in for "push and watch the pipeline" in steps 6, 7 and 9:
+
+```sh
+gitlab-ci-local --force-shell-executor \
+  --variable CI_PROJECT_ID=<pilot project id> \
+  --variable CI_JOB_TOKEN="$GL_TOKEN"
+```
+
+- `--force-shell-executor` runs every job in your shell and ignores the `image:` lines.
+  The venv provides `python`; the laptop provides `git` and `terraform`.
+- `CI_PROJECT_ID` points the Terraform backend at the pilot project's own state, the
+  same state a real pipeline will use later. The id is on the project's overview page,
+  under its name.
+- `CI_JOB_TOKEN` is what the gate job uses to clone the Gate project and the plan job
+  uses for the state. GitLab accepts a personal access token in that position.
+- Your shell's environment is inherited by the jobs: that is how `AWS_PROFILE` and the
+  Falcon variables reach them.
+- After a change to the Gate project itself, add `--fetch-includes` once to refresh the
+  cached template.
+
+Read the result from the last lines: `PASS plan`, `PASS fcs-deploy-gate`, `PASS apply` is
+act one; `PASS plan`, `FAIL fcs-deploy-gate` and no apply line is the blocked Deployment
+of acts two and three. The gate job's summary is in its log above, and in `fcs-gate/`
+in the working tree. Still commit and push each act: the GitLab project stays in step,
+and its pipeline runs for real the day a runner is granted.
+
+If `terraform init` in the plan job answers 401, GitLab did not take the token as the
+state's password; say so and the backend username can be made a variable.
+
 ## 6. Create the pilot repository and push act one
 
 ```sh
@@ -300,7 +378,9 @@ have not already.
 ## 9. The demo: acts two to four
 
 Every act is a commit on `main` in `~/lambda-retention-pilot`, with the runner tab still
-open. Between acts, show the pipeline graph and the gate job's summary.
+open. Between acts, show the pipeline graph and the gate job's summary. Without a runner,
+run the `gitlab-ci-local` command from 5E after each commit, show its PASS and FAIL lines
+and the gate job's log, then push.
 
 ### Act two: Enforcing
 
@@ -385,8 +465,8 @@ pipeline letting the fixed change through.
 | `apply` fails on IAM | The sandbox permission set cannot create or pass a role | Widen it; only four resources are involved |
 | The console shows no pipeline scan after ten minutes | Looking under the wrong name | Search the full path `<group>/lambda-retention-pilot`, not the bare name |
 
-The gate job reuses `/tmp/fcs-gate` between runs on the same machine. The Gate recreates
-that directory and overwrites its outputs each run, so the reuse is harmless.
+The gate job starts by clearing `/tmp/fcs-gate`, so a shell that keeps `/tmp` between
+runs, the laptop runner or `gitlab-ci-local`, never finds a stale clone in the way.
 
 ## 11. After the demo
 

@@ -92,6 +92,8 @@ def test_the_job_clones_the_gate_with_the_job_token_and_runs_the_core() -> None:
     text = script_text(job)
 
     assert "git clone" in text and "$FCS_GATE_REF" in text and "CI_JOB_TOKEN" in text
+    # A shell executor keeps /tmp between jobs; the clone must find its directory absent.
+    assert text.index('rm -rf "$FCS_GATE_SCRATCH"') < text.index("git clone")
     assert "$FCS_GATE_PROJECT" in text
     assert "pip install" in text
     assert "fcs-deploy-gate resolve-baseline" in text

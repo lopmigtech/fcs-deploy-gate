@@ -4,3 +4,6 @@
 *.tfstate.*
 tfplan
 handler.zip
+# Left in the working tree when the jobs run in a shell on the laptop (WALKTHROUGH.md, 5E).
+fcs-gate/
+.gitlab-ci-local/

@@ -43,6 +43,9 @@ fcs-deploy-gate:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
+    # A Docker executor starts with an empty /tmp; a shell executor keeps it between jobs,
+    # and a clone into a directory that already exists fails. Start empty either way.
+    - rm -rf "$FCS_GATE_SCRATCH"
     # The Gate itself, at the tag this template carries, via the job token (the Gate
     # project must allow this project in its job-token allowlist).
     - git clone --quiet --depth 1 --branch "$FCS_GATE_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}/${FCS_GATE_PROJECT}.git" "$FCS_GATE_SCRATCH/gate-src"
