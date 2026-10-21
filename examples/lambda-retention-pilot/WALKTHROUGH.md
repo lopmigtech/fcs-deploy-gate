@@ -33,9 +33,10 @@ Have all of this in hand. Nothing below works around a missing item.
 - **A Falcon CI API client**: the client id and secret the handoff created (Gate README,
   "API clients, the pin and the bounds"). The pipeline file already names the Falcon
   region. You will need the console login as well, to confirm the scan and the IOM.
-- **Sandbox AWS credentials** for the GovCloud sandbox account, able to create and destroy
-  an IAM role, a managed policy attachment, a Lambda function and a CloudWatch log group.
-  Nothing else is created. Only ever apply in the sandbox.
+- **Sandbox AWS access** for the GovCloud sandbox account, able to create and destroy an
+  IAM role, a managed policy attachment, a Lambda function and a CloudWatch log group.
+  Nothing else is created. Only ever apply in the sandbox. An IAM Identity Center profile
+  on the laptop is enough; access keys are not required (step 4b).
 - **GitLab rights**: a group where you can create projects. Creating a project runner
   needs the Maintainer role on the pilot project. If your organisation requires every
   runner to be registered by the platform team, a laptop runner is the same request you
@@ -105,9 +106,31 @@ be a direct push to the default branch, which is also fine for the demo.
 |---|---|---|
 | `FALCON_CLIENT_ID` | Masked | the CI client's id |
 | `FALCON_CLIENT_SECRET` | Masked and hidden | the CI client's secret |
-| `AWS_ACCESS_KEY_ID` | Masked | sandbox credentials |
-| `AWS_SECRET_ACCESS_KEY` | Masked and hidden | sandbox credentials |
-| `AWS_SESSION_TOKEN` | Masked and hidden | only if the sandbox credentials are temporary |
+| `AWS_PROFILE` | plain | the name of your sandbox profile, if the laptop reaches AWS through IAM Identity Center (see below) |
+| `AWS_ACCESS_KEY_ID` | Masked | only for an estate that hands pipelines static or exported credentials |
+| `AWS_SECRET_ACCESS_KEY` | Masked and hidden | same |
+| `AWS_SESSION_TOKEN` | Masked and hidden | same, when those credentials are temporary |
+
+Set one of the two, never both: static credentials in the environment take precedence over
+a profile, and empty ones break the provider.
+
+**IAM Identity Center.** When the laptop signs in to AWS with `aws sso login` rather than
+access keys, the pipeline needs no secret at all: the runner's jobs run as you, so the
+Terraform AWS provider reads `~/.aws/config` and the cached SSO token the same way your
+shell does. Find the profile, sign in, and confirm it is the sandbox:
+
+```sh
+aws configure list-profiles
+aws sso login --profile <sandbox profile>
+aws sts get-caller-identity --profile <sandbox profile>
+```
+
+Then add `AWS_PROFILE` with that name as a plain variable and skip the three `AWS_*`
+credential rows. The session lifetime is set by your Identity Center administrators;
+sign in again before the demo and whenever a job fails with "token has expired" or "no
+valid credential sources". This works because the runner is your laptop. On the real
+fleet, the pipeline would instead present a GitLab ID token to an IAM role in the
+sandbox account (OIDC); that is a later change to the pilot, not part of this walkthrough.
 
 Everything else the pipeline needs is in `.gitlab-ci.yml` already: the Falcon region, the
 scanned path, the Advisory mode, the Blocking threshold that includes informational, the
@@ -358,7 +381,8 @@ pipeline letting the fixed change through.
 | Gate job: "could not scan", exit code outside 0 and 10 to 40 | A real CLI error; the summary quotes its last lines | Read the quoted lines; the Gate README's "How the Gate decides" lists the cases |
 | `plan` fails on `terraform init` with 403 | Infrastructure feature off | Step 4a |
 | `plan` fails downloading providers | No reach to the Terraform registry | Point `TF_CLI_CONFIG_FILE` at a mirror configuration, or open the egress |
-| `apply` fails on IAM | The sandbox credentials cannot create or pass a role | Widen the sandbox role; only four resources are involved |
+| `plan` or `apply` fails with "token has expired" or "no valid credential sources" | The Identity Center session ended, or `AWS_PROFILE` names a profile the laptop does not have | `aws sso login --profile <sandbox profile>` again; check the name with `aws configure list-profiles` |
+| `apply` fails on IAM | The sandbox permission set cannot create or pass a role | Widen it; only four resources are involved |
 | The console shows no pipeline scan after ten minutes | Looking under the wrong name | Search the full path `<group>/lambda-retention-pilot`, not the bare name |
 
 The gate job reuses `/tmp/fcs-gate` between runs on the same machine. The Gate recreates
@@ -376,8 +400,9 @@ and delete `laptop-pilot` on the pilot project's Runners page.
 
 **Destroy the sandbox resources.** The state is in GitLab, so Terraform needs the same
 backend arguments the pipeline used, with a personal access token in place of the job
-token. Create a token with the `api` scope and a short expiry, export the sandbox
-credentials in your shell, then:
+token. Create a token with the `api` scope and a short expiry, sign in to the sandbox in
+your shell (`aws sso login`, then `export AWS_PROFILE=<sandbox profile>`, or export the
+credentials your estate hands out), then:
 
 ```sh
 cd ~/lambda-retention-pilot/lambda
