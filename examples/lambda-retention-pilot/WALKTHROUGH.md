@@ -255,7 +255,7 @@ npm install -g --prefix ~/.local gitlab-ci-local
 gitlab-ci-local --version
 python3 -m venv ~/gate-venv                       # if 5a did not run
 terraform version                                 # install as in 5a if missing
-git ls-remote https://<gitlab-host>/mlopez/fcs-iac.git HEAD
+git ls-remote https://<gitlab-host>/<path to the gate project>.git HEAD
 ```
 
 The last command must print a commit id without asking for credentials: the include is
@@ -404,6 +404,11 @@ Record: the time the IOM first appeared, and the policy's exact name and Severit
 have not already.
 
 ## 9. The demo: acts two to four
+
+`DEMO.md` is the run of show, and `demo/` makes each act one command:
+`demo/act2.sh && demo/run.sh`, and so on. The act scripts put the repository into the
+act's complete state and commit it, so they can be run in any order and repeated. The
+edits below are what those scripts do.
 
 Every act is a commit on `main` in `~/lambda-retention-pilot`, with the runner tab still
 open. Between acts, show the pipeline graph and the gate job's summary. Without a runner,

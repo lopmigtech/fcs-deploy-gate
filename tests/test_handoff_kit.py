@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+from pathlib import Path
 
 from fcs_deploy_gate.falcon import CLIENT_ID_VAR, CLIENT_SECRET_VAR
 from tests.adapters import README, REPO, TEMPLATE, load
@@ -206,3 +208,76 @@ def test_the_pilot_terraform_has_exactly_the_retention_gap() -> None:
     assert not re.search(r"^\s*retention_in_days\s*=", terraform, re.MULTILINE)
     assert "aws_partition" in terraform  # GovCloud ARNs are arn:aws-us-gov:
     assert not re.search(r"AKIA[0-9A-Z]{16}|secret_key|password", terraform)
+
+
+DEMO = PILOT / "demo"
+
+
+def test_the_demo_run_script_carries_the_local_executor_flags() -> None:
+    script = (DEMO / "run.sh").read_text()
+
+    assert os.access(DEMO / "run.sh", os.X_OK)
+    for flag in (
+        "--force-shell-executor",
+        "--stage test",
+        "--ignore-predefined-vars CI_PROJECT_ID,CI_PROJECT_DIR",
+        'CI_PROJECT_DIR="$PWD"',
+        "TF_STATE_USERNAME",
+    ):
+        assert flag in script, flag
+    assert "-lock=false" not in script and "--fcs-binary" not in script
+
+
+def test_the_demo_act_scripts_materialise_each_act(tmp_path: Path) -> None:
+    """Each act is a complete state and a commit; a repeated act changes nothing."""
+    repo = tmp_path / "pilot"
+    shutil.copytree(PILOT, repo)
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "DEMO_APPROVER": "A. Reviewer"}
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True
+        )
+        return done.stdout
+
+    def act(number: int) -> str:
+        done = subprocess.run(
+            [str(repo / "demo" / f"act{number}.sh")],
+            cwd=repo,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return done.stdout
+
+    def state() -> tuple[str, bool, bool]:
+        pipeline = (repo / ".gitlab-ci.yml").read_text()
+        mode = re.search(r"^  FCS_GATE_MODE: (\w+)", pipeline, re.MULTILINE)
+        assert mode is not None
+        terraform = (repo / "lambda" / "main.tf").read_text()
+        retention = bool(re.search(r"^\s*retention_in_days\s*=", terraform, re.MULTILINE))
+        return mode.group(1), (repo / ".fcs-gate.yml").exists(), retention
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "pilot@example.invalid")
+    git("config", "user.name", "Pilot")
+    git("add", "-A")
+    git("commit", "-q", "-m", "the example as copied")
+    assert state() == ("advisory", False, False)  # the example ships as act one
+
+    act(2)
+    assert state() == ("enforcing", False, False)
+    act(3)
+    assert state() == ("enforcing", True, False)
+    assert 'approved_by: "A. Reviewer"' in (repo / ".fcs-gate.yml").read_text()
+    act(4)
+    assert state() == ("enforcing", True, True)
+    terraform = (repo / "lambda" / "main.tf").read_text()
+    assert 'resource "aws_cloudwatch_log_group" "pilot" {\n  retention_in_days = 30\n' in terraform
+    commits = git("rev-list", "--count", "HEAD")
+    assert "nothing to commit" in act(4)
+    assert git("rev-list", "--count", "HEAD") == commits
+    act(1)
+    assert state() == ("advisory", False, False)
+    assert git("rev-list", "--count", "HEAD").strip() == "5"  # the copy and four acts

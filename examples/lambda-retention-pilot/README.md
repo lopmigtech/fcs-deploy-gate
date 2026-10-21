@@ -4,7 +4,9 @@ A Consumer repository for a demo of the Gate against one rule: a Lambda function
 CloudWatch log group has no retention. Copy this directory into an empty GitLab project,
 set the variables the pipeline's header names, and push. `WALKTHROUGH.md` beside this
 file is the full procedure, from two empty GitLab projects to the four acts, with the
-pipeline's jobs run by a project runner on your own laptop.
+pipeline's jobs run by a project runner on your own laptop, or by a local executor when
+none can be created. `DEMO.md` is the run of show, and `demo/` holds one script per act
+plus the local run.
 
 The Terraform under `lambda/` is the minimum a function needs plus one deliberate gap,
 the log group without `retention_in_days`. The pipeline plans in merge-request and
