@@ -326,8 +326,13 @@ of acts two and three. The gate job's summary is in its log above, and in `fcs-g
 in the working tree. Still commit and push each act: the GitLab project stays in step,
 and its pipeline runs for real the day a runner is granted.
 
-If `terraform init` in the plan job answers 401, GitLab did not take the token as the
-state's password; say so and the backend username can be made a variable.
+If the plan job's state lock answers 401, GitLab did not take the token as the state's
+password under the job token's username; add `--variable TF_STATE_USERNAME=<your gitlab
+username>` to the run. A 404 is a wrong project id; a 403 is the Infrastructure feature
+off; "Lock Info" with an id is a lock left by an interrupted run, released under Operate,
+Terraform states, or with `terraform force-unlock <id>` from `lambda/`. Terraform keeps
+the backend settings it was given, token included, in `lambda/.terraform/`; delete that
+directory when the pilot is over or the token is revoked.
 
 ## 6. Create the pilot repository and push act one
 
