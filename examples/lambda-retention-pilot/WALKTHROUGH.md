@@ -286,8 +286,12 @@ gitlab-ci-local --force-shell-executor \
   --variable CI_PROJECT_ID=<pilot project id> \
   --variable CI_PROJECT_DIR="$PWD" \
   --variable CI_JOB_TOKEN="$GL_TOKEN" \
-  --ignore-predefined-vars CI_PROJECT_ID --ignore-predefined-vars CI_PROJECT_DIR
+  --ignore-predefined-vars CI_PROJECT_ID,CI_PROJECT_DIR
 ```
+
+To run without deploying, add `--stage test`: plan and the gate job run, apply does not.
+Plan changes nothing in AWS; it reads the account, builds the planfile and takes and
+releases the state lock.
 
 - `--force-shell-executor` runs every job in your shell and ignores the `image:` lines.
   The venv provides `python`; the laptop provides `git` and `terraform`.
@@ -303,7 +307,8 @@ gitlab-ci-local --force-shell-executor \
   uses for the state. GitLab accepts a personal access token in that position (confirmed
   for the clone on the first local run).
 - `--ignore-predefined-vars` only silences the executor's warning about the two
-  overrides.
+  overrides. Give it once, comma-separated; given twice, the executor fails with
+  "r.split is not a function".
 - Your shell's environment is inherited by the jobs: that is how `AWS_PROFILE` and the
   Falcon variables reach them.
 - After a change to the Gate project itself, add `--fetch-includes` once to refresh the
