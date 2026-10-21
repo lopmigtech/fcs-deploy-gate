@@ -271,9 +271,11 @@ the Gate project and for the Terraform state. Keep it in your shell, never in a 
 
 ```sh
 cd ~/lambda-retention-pilot
+git remote set-head origin main                   # once, after the first push
 source ~/gate-venv/bin/activate
 export AWS_PROFILE=<sandbox profile>              # after aws sso login
 export FALCON_CLIENT_ID=... FALCON_CLIENT_SECRET=...   # as for today's laptop scans
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 read -rs -p "GitLab token: " GL_TOKEN; echo
 ```
 
@@ -282,20 +284,36 @@ read -rs -p "GitLab token: " GL_TOKEN; echo
 ```sh
 gitlab-ci-local --force-shell-executor \
   --variable CI_PROJECT_ID=<pilot project id> \
-  --variable CI_JOB_TOKEN="$GL_TOKEN"
+  --variable CI_PROJECT_DIR="$PWD" \
+  --variable CI_JOB_TOKEN="$GL_TOKEN" \
+  --ignore-predefined-vars CI_PROJECT_ID --ignore-predefined-vars CI_PROJECT_DIR
 ```
 
 - `--force-shell-executor` runs every job in your shell and ignores the `image:` lines.
   The venv provides `python`; the laptop provides `git` and `terraform`.
 - `CI_PROJECT_ID` points the Terraform backend at the pilot project's own state, the
-  same state a real pipeline will use later. The id is on the project's overview page,
-  under its name.
+  same state a real pipeline will use later. It is the **number** labelled "Project ID"
+  under the project's name on its overview page, not a commit id or a token. With a
+  wrong value every state call answers 404 and the plan fails "acquiring the state lock".
+- `CI_PROJECT_DIR` is where the gate job's after-script copies `summary.md`,
+  `verdict.json` and the raw report. The local executor sets it to a path under
+  `/builds` that does not exist on the laptop; pointing it at the working tree puts
+  them in `fcs-gate/`.
 - `CI_JOB_TOKEN` is what the gate job uses to clone the Gate project and the plan job
-  uses for the state. GitLab accepts a personal access token in that position.
+  uses for the state. GitLab accepts a personal access token in that position (confirmed
+  for the clone on the first local run).
+- `--ignore-predefined-vars` only silences the executor's warning about the two
+  overrides.
 - Your shell's environment is inherited by the jobs: that is how `AWS_PROFILE` and the
   Falcon variables reach them.
 - After a change to the Gate project itself, add `--fetch-includes` once to refresh the
   cached template.
+
+**What GitLab shows meanwhile.** Each push still creates a pipeline in the project's
+CI/CD page, with jobs that wait for a runner and that GitLab marks failed as stuck after
+about an hour. That is expected: the file is the project's real pipeline, the runner
+assignment is pending, and the laptop is where that same file executed. The day a
+runner is granted, the pushes run for real against the same state.
 
 Read the result from the last lines: `PASS plan`, `PASS fcs-deploy-gate`, `PASS apply` is
 act one; `PASS plan`, `FAIL fcs-deploy-gate` and no apply line is the blocked Deployment
