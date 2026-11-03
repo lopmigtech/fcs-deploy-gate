@@ -64,19 +64,18 @@ fcs-deploy-gate:
           error=*) BASELINE_ERROR="${RESOLVED#error=}" ;;
         esac
       fi
-    # The whole repository at the Baseline ref, in a worktree outside the checkout; the
-    # core scans the scanned path's counterpart in it. The checkout can belong to another
-    # user than the job's (the Kubernetes executor's helper container writes it), which git
-    # refuses until told the directory is safe. The checkout persists in the runner's build
-    # cache between jobs while /tmp does not, so a stale worktree registration is pruned
-    # first. Any failure here becomes a Baseline error for the core to turn into a blocked
-    # Verdict; it must not end the job, which would leave no Verdict at all.
+    # The whole repository at the Baseline ref, in a fresh repository outside the checkout;
+    # the core scans the scanned path's counterpart in it. Nothing here runs git in the
+    # checkout: this job holds the Falcon client, and a hook or setting left in its .git by
+    # an earlier job on a reused build directory would run with it. That also means a
+    # checkout owned by another user (the Kubernetes executor's helper container writes it)
+    # needs no exception. Any failure here becomes a Baseline error for the core to turn
+    # into a blocked Verdict; it must not end the job, which would leave no Verdict at all.
     - |
       if [ -n "$BASELINE_REF" ]; then
-        if git config --global --add safe.directory "$CI_PROJECT_DIR" \
-          && git worktree prune \
-          && git fetch --no-tags --depth=1 origin "$BASELINE_REF" \
-          && git worktree add --detach "$FCS_GATE_SCRATCH/baseline" FETCH_HEAD; then
+        if git init --quiet "$FCS_GATE_SCRATCH/baseline" \
+          && git -C "$FCS_GATE_SCRATCH/baseline" fetch --quiet --no-tags --depth=1 "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}/${CI_PROJECT_PATH}.git" "$BASELINE_REF" \
+          && git -C "$FCS_GATE_SCRATCH/baseline" checkout --quiet --detach FETCH_HEAD; then
           :
         else
           BASELINE_ERROR="the Baseline ref $BASELINE_REF could not be checked out (git's error is in the job log; a force push may have removed the ref)"

@@ -25,6 +25,7 @@ from tests.adapters import (
 )
 
 JOB = "fcs-deploy-gate"
+PROJECT_URL = "https://gitlab-ci-token:token@gitlab.example/group/consumer.git"
 
 
 def template() -> dict[str, Any]:
@@ -106,8 +107,9 @@ def test_the_job_clones_the_gate_with_the_job_token_and_runs_the_core() -> None:
     assert "CI_MERGE_REQUEST_DIFF_BASE_SHA" in text
     assert "CI_COMMIT_BEFORE_SHA" in text
     assert "$FCS_GATE_BASELINE_REF" in text
-    assert "git worktree prune" in text  # a stale registration survives the runner's build cache
-    assert "git worktree add" in text
+    # The job holds the Falcon client, so it never runs git in the checkout's .git.
+    assert "git worktree" not in text
+    assert "safe.directory" not in text
     assert "fcs-deploy-gate run" in text
     assert '--work-dir "$FCS_GATE_SCRATCH' in text
     assert all(flag in text for flag in ("--baseline-dir", "--baseline-ref", "--baseline-error"))
@@ -162,29 +164,31 @@ def a_checkout_with_a_baseline(root: Path, home: Path) -> tuple[Path, str]:
     (checkout / "main.tf").write_text("# at the change\n")
     git(checkout, home, "commit", "--quiet", "--all", "-m", "the change")
     git(checkout, home, "push", "--quiet", "origin", "main")
-    # Reading the remote is not what these tests are about, so it is trusted from the start.
-    git(checkout, home, "config", "--global", "--add", "safe.directory", str(origin))
+    # The job fetches from the URL the template builds; here that URL leads to the local remote.
+    git(checkout, home, "config", "--global", f"url.{origin.as_uri()}.insteadOf", PROJECT_URL)
     return checkout, baseline
 
 
 def run_the_baseline_step(
-    cwd: Path, checkout: Path, scratch: Path, home: Path, ref: str
+    cwd: Path, scratch: Path, home: Path, ref: str, extra_env: dict[str, str] | None = None
 ) -> tuple[subprocess.CompletedProcess[str], str]:
-    """The template's Baseline step as a runner runs it: under errexit, in the checkout, with
-    git treating the checkout as another user's, which is what the Kubernetes executor's
-    helper container leaves behind. Returns the shell's result and the Baseline error."""
-    [step_source] = [str(line) for line in template()[JOB]["script"] if "git worktree add" in line]
+    """The template's Baseline step as a runner runs it: under errexit, from the given
+    directory. Returns the shell's result and the Baseline error."""
+    [step_source] = [str(line) for line in template()[JOB]["script"] if "FETCH_HEAD" in str(line)]
     source = (
         f'set -e\nBASELINE_ERROR=""\n{step_source}\nprintf "%s" "$BASELINE_ERROR" > "$REPORT"\n'
     )
     report = scratch / "baseline-error"
     env = {
         **git_env(home),
-        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
-        "CI_PROJECT_DIR": str(checkout),
+        "CI_SERVER_PROTOCOL": "https",
+        "CI_JOB_TOKEN": "token",
+        "CI_SERVER_FQDN": "gitlab.example",
+        "CI_PROJECT_PATH": "group/consumer",
         "FCS_GATE_SCRATCH": str(scratch),
         "BASELINE_REF": ref,
         "REPORT": str(report),
+        **(extra_env or {}),
     }
     completed = subprocess.run(
         ["bash", "-c", source], cwd=cwd, env=env, capture_output=True, text=True, check=False
@@ -192,17 +196,44 @@ def run_the_baseline_step(
     return completed, report.read_text() if report.exists() else ""
 
 
-def test_the_baseline_step_works_on_a_checkout_that_belongs_to_another_user(tmp_path: Path) -> None:
+def test_the_baseline_step_does_not_need_the_checkouts_git_directory(tmp_path: Path) -> None:
+    """A checkout git refuses, such as one the Kubernetes executor's helper container left
+    owned by another user, cannot stop the step if the step never looks at it."""
+    home = tmp_path / "home"
+    scratch = tmp_path / "scratch"
+    elsewhere = tmp_path / "not-a-repository"
+    for directory in (home, scratch, elsewhere):
+        directory.mkdir()
+    _, baseline = a_checkout_with_a_baseline(tmp_path, home)
+
+    completed, error = run_the_baseline_step(elsewhere, scratch, home, baseline)
+
+    assert completed.returncode == 0, completed.stderr
+    assert error == ""
+    assert (scratch / "baseline" / "main.tf").read_text() == "# at the Baseline\n"
+
+
+def test_a_hook_planted_in_the_checkout_never_sees_the_falcon_client(tmp_path: Path) -> None:
+    """On a reused build directory an earlier job, even one from an unreviewed branch, can
+    leave a hook in .git. The default-branch job holds the protected Falcon client, so
+    running git there would hand it over."""
     home = tmp_path / "home"
     scratch = tmp_path / "scratch"
     home.mkdir()
     scratch.mkdir()
     checkout, baseline = a_checkout_with_a_baseline(tmp_path, home)
+    marker = tmp_path / "the-hook-saw"
+    hook = checkout / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f'#!/bin/sh\necho "$FALCON_CLIENT_SECRET" > "{marker}"\n')
+    hook.chmod(0o755)
 
-    completed, error = run_the_baseline_step(checkout, checkout, scratch, home, baseline)
+    completed, error = run_the_baseline_step(
+        checkout, scratch, home, baseline, {"FALCON_CLIENT_SECRET": "secret"}
+    )
 
     assert completed.returncode == 0, completed.stderr
     assert error == ""
+    assert not marker.exists()
     assert (scratch / "baseline" / "main.tf").read_text() == "# at the Baseline\n"
 
 
@@ -213,13 +244,11 @@ def test_a_git_failure_in_the_baseline_step_is_a_baseline_error_not_a_failed_job
     ends the job instead leaves no Verdict at all, and in Advisory stops the Deployment."""
     home = tmp_path / "home"
     scratch = tmp_path / "scratch"
-    not_a_repository = tmp_path / "not-a-repository"
-    for directory in (home, scratch, not_a_repository):
-        directory.mkdir()
+    home.mkdir()
+    scratch.mkdir()
+    checkout, _ = a_checkout_with_a_baseline(tmp_path, home)
 
-    completed, error = run_the_baseline_step(
-        not_a_repository, not_a_repository, scratch, home, "deadbeef"
-    )
+    completed, error = run_the_baseline_step(checkout, scratch, home, "deadbeef")
 
     assert completed.returncode == 0, completed.stderr
     assert "the Baseline ref deadbeef could not be checked out" in error
