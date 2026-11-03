@@ -1,11 +1,15 @@
 """The GitLab adapter is validated statically (spec: Testing Decisions): an included CI
 template whose job clones the Gate at the package's own version with the job token,
-resolves the Baseline through the core, and runs the same command as the GitHub adapter."""
+resolves the Baseline through the core, and runs the same command as the GitHub adapter.
+Its Baseline step is also run for real against local repositories, since what it does
+depends on how git treats the runner's checkout."""
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from tests.adapters import (
@@ -121,6 +125,104 @@ def test_the_script_is_valid_bash() -> None:
             ["bash", "-n"], input=source, capture_output=True, text=True, check=False
         )
         assert completed.returncode == 0, f"{section}: {completed.stderr}"
+
+
+def git_env(home: Path) -> dict[str, str]:
+    return {
+        "PATH": os.environ["PATH"],
+        "HOME": str(home),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+
+
+def git(cwd: Path, home: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args], cwd=cwd, env=git_env(home), capture_output=True, text=True, check=True
+    )
+    return completed.stdout.strip()
+
+
+def a_checkout_with_a_baseline(root: Path, home: Path) -> tuple[Path, str]:
+    """A checkout with a remote and two commits; returns it and the first commit, the Baseline."""
+    origin = root / "origin.git"
+    checkout = root / "checkout"
+    origin.mkdir()
+    checkout.mkdir()
+    git(origin, home, "init", "--quiet", "--bare", "--initial-branch=main")
+    git(checkout, home, "init", "--quiet", "--initial-branch=main")
+    git(checkout, home, "remote", "add", "origin", origin.as_uri())
+    (checkout / "main.tf").write_text("# at the Baseline\n")
+    git(checkout, home, "add", "main.tf")
+    git(checkout, home, "commit", "--quiet", "-m", "the Baseline")
+    baseline = git(checkout, home, "rev-parse", "HEAD")
+    (checkout / "main.tf").write_text("# at the change\n")
+    git(checkout, home, "commit", "--quiet", "--all", "-m", "the change")
+    git(checkout, home, "push", "--quiet", "origin", "main")
+    # Reading the remote is not what these tests are about, so it is trusted from the start.
+    git(checkout, home, "config", "--global", "--add", "safe.directory", str(origin))
+    return checkout, baseline
+
+
+def run_the_baseline_step(
+    cwd: Path, checkout: Path, scratch: Path, home: Path, ref: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """The template's Baseline step as a runner runs it: under errexit, in the checkout, with
+    git treating the checkout as another user's, which is what the Kubernetes executor's
+    helper container leaves behind. Returns the shell's result and the Baseline error."""
+    [step_source] = [str(line) for line in template()[JOB]["script"] if "git worktree add" in line]
+    source = (
+        f'set -e\nBASELINE_ERROR=""\n{step_source}\nprintf "%s" "$BASELINE_ERROR" > "$REPORT"\n'
+    )
+    report = scratch / "baseline-error"
+    env = {
+        **git_env(home),
+        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+        "CI_PROJECT_DIR": str(checkout),
+        "FCS_GATE_SCRATCH": str(scratch),
+        "BASELINE_REF": ref,
+        "REPORT": str(report),
+    }
+    completed = subprocess.run(
+        ["bash", "-c", source], cwd=cwd, env=env, capture_output=True, text=True, check=False
+    )
+    return completed, report.read_text() if report.exists() else ""
+
+
+def test_the_baseline_step_works_on_a_checkout_that_belongs_to_another_user(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    scratch = tmp_path / "scratch"
+    home.mkdir()
+    scratch.mkdir()
+    checkout, baseline = a_checkout_with_a_baseline(tmp_path, home)
+
+    completed, error = run_the_baseline_step(checkout, checkout, scratch, home, baseline)
+
+    assert completed.returncode == 0, completed.stderr
+    assert error == ""
+    assert (scratch / "baseline" / "main.tf").read_text() == "# at the Baseline\n"
+
+
+def test_a_git_failure_in_the_baseline_step_is_a_baseline_error_not_a_failed_job(
+    tmp_path: Path,
+) -> None:
+    """ADR 0001: the core turns a Baseline error into a blocked Verdict. A git command that
+    ends the job instead leaves no Verdict at all, and in Advisory stops the Deployment."""
+    home = tmp_path / "home"
+    scratch = tmp_path / "scratch"
+    not_a_repository = tmp_path / "not-a-repository"
+    for directory in (home, scratch, not_a_repository):
+        directory.mkdir()
+
+    completed, error = run_the_baseline_step(
+        not_a_repository, not_a_repository, scratch, home, "deadbeef"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "the Baseline ref deadbeef could not be checked out" in error
 
 
 def test_artifacts_are_kept_on_success_and_failure() -> None:

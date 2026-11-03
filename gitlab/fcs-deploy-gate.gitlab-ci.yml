@@ -65,17 +65,21 @@ fcs-deploy-gate:
         esac
       fi
     # The whole repository at the Baseline ref, in a worktree outside the checkout; the
-    # core scans the scanned path's counterpart in it. The checkout persists in the
-    # runner's build cache between jobs while /tmp does not, so a stale worktree
-    # registration is pruned first. A ref that cannot be fetched becomes a Baseline error
-    # for the core to turn into a blocked Verdict.
+    # core scans the scanned path's counterpart in it. The checkout can belong to another
+    # user than the job's (the Kubernetes executor's helper container writes it), which git
+    # refuses until told the directory is safe. The checkout persists in the runner's build
+    # cache between jobs while /tmp does not, so a stale worktree registration is pruned
+    # first. Any failure here becomes a Baseline error for the core to turn into a blocked
+    # Verdict; it must not end the job, which would leave no Verdict at all.
     - |
       if [ -n "$BASELINE_REF" ]; then
-        git worktree prune
-        if git fetch --no-tags --depth=1 origin "$BASELINE_REF" && git worktree add --detach "$FCS_GATE_SCRATCH/baseline" FETCH_HEAD; then
+        if git config --global --add safe.directory "$CI_PROJECT_DIR" \
+          && git worktree prune \
+          && git fetch --no-tags --depth=1 origin "$BASELINE_REF" \
+          && git worktree add --detach "$FCS_GATE_SCRATCH/baseline" FETCH_HEAD; then
           :
         else
-          BASELINE_ERROR="the Baseline ref $BASELINE_REF could not be checked out (not reachable from the remote; a force push may have removed it)"
+          BASELINE_ERROR="the Baseline ref $BASELINE_REF could not be checked out (git's error is in the job log; a force push may have removed the ref)"
         fi
       fi
     # The core writes verdict.json, summary.md and the raw reports to the work directory
